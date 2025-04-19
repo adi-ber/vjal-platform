@@ -6,27 +6,31 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-#### 2. Builder with garble ####
+#### 2. Builder (stripped binary) ####
 FROM modcache AS builder
-# Install a fixed garble version
-RUN go install mvdan.cc/garble@v0.12.0
 WORKDIR /app
 COPY . .
-RUN garble build -o vjal-app ./cmd/example
+# Build statically with symbol-stripping (-s -w)
+RUN CGO_ENABLED=0 go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o vjal-app \
+    ./cmd/example
 
 #### 3. Compressor ####
 FROM builder AS compressor
-RUN apt-get update && apt-get install -y --no-install-recommends upx \
-    && upx --fast vjal-app \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends upx \
+ && upx --fast vjal-app \
+ && rm -rf /var/lib/apt/lists/*
 
 #### 4. Final image ####
 FROM scratch
-# Compressed binary
+# Compressed, stripped binary
 COPY --from=compressor /app/vjal-app /vjal-app
 # Runtime assets
-COPY --from=builder /app/config.json /config.json
+COPY --from=builder /app/config.json  /config.json
 COPY --from=builder /app/license.json /license.json
-COPY --from=builder /app/forms /forms
+COPY --from=builder /app/forms        /forms
 
 ENTRYPOINT ["/vjal-app"]
