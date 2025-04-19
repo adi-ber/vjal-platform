@@ -1,5 +1,0 @@
-{
-  "license_key": "DUMMY-KEY",
-  "expires": "2099-12-31T23:59:59Z",
-  "features": ["offline_llm","cv_analysis"]
-}

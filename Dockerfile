@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---------- Builder Stage ----------
-FROM golang:1.21-buster AS builder
+FROM golang:1.21-bullseye AS builder
 
 # Install garble and upx
 RUN go install mvdan.cc/garble@latest \

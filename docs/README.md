@@ -1,1 +1,0 @@
-# Vjal Platform Docs
