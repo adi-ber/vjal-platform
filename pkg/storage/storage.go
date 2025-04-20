@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/adi-ber/vjal-platform/pkg/metrics"
 	_ "modernc.org/sqlite"
 )
 
@@ -36,7 +37,9 @@ CREATE TABLE IF NOT EXISTS state (
 // Save stores the JSON-serialized value under (namespace, key).
 // On conflict it overwrites the existing data.
 func (s *Store) Save(namespace, key string, value interface{}) error {
-	bytes, err := json.Marshal(value)
+	metrics.StateSaveTotal.Inc()
+
+	bytesData, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("failed to marshal value: %w", err)
 	}
@@ -44,15 +47,17 @@ func (s *Store) Save(namespace, key string, value interface{}) error {
 INSERT INTO state (namespace, item_key, data)
 VALUES (?, ?, ?)
 ON CONFLICT(namespace, item_key) DO UPDATE SET data=excluded.data;`
-	if _, err := s.db.Exec(stmt, namespace, key, string(bytes)); err != nil {
+	if _, err := s.db.Exec(stmt, namespace, key, string(bytesData)); err != nil {
 		return fmt.Errorf("failed to save state: %w", err)
 	}
 	return nil
 }
 
-// Load retrieves the JSON data for (namespace, key) and unmarshals it into value.
-// If no row exists, it leaves value untouched (so callers can initialize it first).
-func (s *Store) Load(namespace, key string, value interface{}) error {
+// Load retrieves the JSON data for (namespace, key) and unmarshals it into dest.
+// If no row exists, it leaves dest untouched.
+func (s *Store) Load(namespace, key string, dest interface{}) error {
+	metrics.StateLoadTotal.Inc()
+
 	const query = `SELECT data FROM state WHERE namespace = ? AND item_key = ?;`
 	row := s.db.QueryRow(query, namespace, key)
 
@@ -63,7 +68,7 @@ func (s *Store) Load(namespace, key string, value interface{}) error {
 		}
 		return fmt.Errorf("failed to query state: %w", err)
 	}
-	if err := json.Unmarshal([]byte(jsonData), value); err != nil {
+	if err := json.Unmarshal([]byte(jsonData), dest); err != nil {
 		return fmt.Errorf("failed to unmarshal state data: %w", err)
 	}
 	return nil
