@@ -1,0 +1,129 @@
+Current Application Overview
+The VjalTools Demo App is a Go‑based service that showcases a complete “schema‑driven form → prompt templating → LLM call → PDF/HTML/Markdown output” workflow. It consists of:
+
+Client‑side: A Tailwind CSS + Alpine.js form that reads your JSON schema and lets users fill it out dynamically.
+
+Server‑side: A Go HTTP server (cmd/process-example/main.go) that:
+
+Loads configuration & validates license
+
+Serves the form via /form-demo
+
+Processes submissions via /process
+
+Routes to either an official OpenAI client or an offline stub
+
+Renders AI responses into PDF, HTML, or Markdown
+
+Exposes Prometheus metrics and a health endpoint
+
+All core logic lives under pkg/…, in modular packages:
+
+pkg/config – JSON/env loading with metrics
+
+pkg/license – license file parsing & checks
+
+pkg/storage – simple SQLite/file‑based state
+
+pkg/form – JSON schema → page rendering & validation
+
+pkg/llm – provider‑based LLM interface
+
+pkg/output – Markdown→HTML + PDF (DejaVu Sans embed) renderer
+
+pkg/metrics – Prometheus counters/histograms
+
+Architecture
+text
+Copy
+Edit
+Browser (Alpine + Tailwind)
+ └─ GET /form-demo ─▶ Go Server ──┬─ Read JSON schema
+                                 ├─ Inject schema & promptKeys into HTML
+                                 └─ Serve form_demo.html
+
+User fills form → Submit → JS POST /process {promptKey,data,format}
+ └─ Go Server:
+     • Lookup promptTemplates[promptKey]
+     • Merge data via text/template
+     • ai.Prompt(ctx, mergedPrompt) → string
+     • switch format:
+         – md  → text/markdown
+         – html→ Markdown→HTML
+         – pdf → Markdown→DejaVu PDF
+     • Return response (blob / text)
+
+Metrics: every step increments Prometheus metrics  
+Health: GET /healthz → “OK”  
+Metrics UI: GET /metrics → Prometheus scrape
+Key Design Choices
+
+Component	Choice	Rationale & Pros/Cons
+Language	Go (single‑binary, no package distributors)	✅ Fast, cross‑compile, small runtime; ❌ GC pauses
+Form UI	JSON Schema + Alpine.js + Tailwind	✅ Reactive, modern CSS, zero‑build JS; ❌ extra JS
+Prompt Storage	In‑code Go map[string]string	✅ Compile‑time safe, IP in binary; ❌ redeploy to update
+LLM Routing	pkg/llm interface + switch on cfg.LLMProvider	✅ Flexible (openai vs offline vs future); ❌ slight indirection
+PDF Rendering	gofpdf + embed DejaVu Sans via github.com/go-fonts/dejavu/dejavusans	✅ Full UTF‑8 (bullets, emojis); ❌ +500 KB binary
+Metrics	Prometheus promauto histograms & counters in each pkg	✅ Detailed observability
+Packaging	Single demo-process binary; Tailwind + Alpine served via CDN	✅ Easy local/demo; ❌ relies on external CDN network
+Implementation Status
+✅ Config, License, Storage, Form, Output, Metrics packages: all have passing go test
+
+✅ Embedded DejaVu Sans (full UTF‑8 PDF)
+
+✅ Official OpenAI Go SDK integration via openai-go v2+
+
+✅ Offline stub available for llmProvider: "offline"
+
+✅ Demo endpoints:
+
+/form-demo (interactive form)
+
+/process (JSON → LLM → PDF/HTML/MD)
+
+/metrics, /healthz
+
+✅ CI script (test_all.sh) runs all pkg tests and builds binaries
+
+✅ Fly.io Docker deployment tested (with CGO/SQlite caveats resolved)
+
+Error History & Resolutions
+
+Error	Cause & Fix
+Struct‑tag parse errors	Used + "json:"…" + instead of raw back‑ticks. Fixed by rewriting struct as `json:"…"`
+Missing imports (context, embed)	Added import "context" in pkg/llm/llm.go; added import "embed" in pkg/output/renderer.go
+PDF bullets → “â€¢”	Default WinAnsi font lacked “•” → embedded DejaVu Sans via go-fonts/dejavu/dejavusans
+Offline demo blank PDF	Stub LLM returned placeholder → integrated official OpenAI SDK (or offline stub) for real responses
+openai-go API mismatch	User code used sashabaranov/go-openai patterns against openai/openai-go v2 API. Rewrote Prompt() using client.Chat.Completions.New(...)
+Prometheus handler import	Replaced prometheus.Handler() with promhttp.Handler() and added missing import
+Fly.io CGO-disabled SQlite	Switched to pure‑Go storage or enabled CGO for sqlite3 on build
+Next Steps
+UI Polish
+
+Add validation feedback, mobile‐friendly layouts, multi‑page flows
+
+Use Alpine to fetch LLM‑driven follow‑up questions in real‑time
+
+Prompt Management
+
+Consider loading templates from encrypted JSON or DB
+
+Error UX
+
+Replace alert() with a nicer toast/popup component
+
+Offline Mode
+
+Integrate Gemma 27B or other local LLM via CGO or WASM
+
+Packaging & Release
+
+Build Docker image, publish to container registry
+
+Automate Fly.io deploy in CI
+
+Testing & QA
+
+E2E tests: spin up server, POST sample JSON, verify PDF header %PDF-1.3
+
+Load tests on form + LLM calls

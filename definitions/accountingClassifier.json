@@ -1,0 +1,16 @@
+{
+  "accountingClassifier": [
+    {
+      "id": "description",
+      "label": "Description",
+      "type": "text",
+      "validations": { "required": true }
+    },
+    {
+      "id": "amount",
+      "label": "Amount",
+      "type": "number",
+      "validations": { "min": 0.01 }
+    }
+  ]
+}

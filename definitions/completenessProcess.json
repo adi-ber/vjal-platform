@@ -1,0 +1,14 @@
+{
+  "completenessProcess": {
+    "initialQuestion": {
+      "id": "description",
+      "label": "Describe your process end‑to‑end",
+      "type": "textarea",
+      "validations": { "required": true, "minLength": 50 }
+    },
+    "completenessCheck": {
+      "llmPromptTemplate": "You are an expert reviewer. Given the history of answers:\\n\\n{{.History}}\\n\\nList any missing questions as a JSON array of objects {\"id\":\"<field_id>\",\"label\":\"<question_text>\",\"type\":\"<input_type>\"}.  If complete, return an empty array.",
+      "maxRounds": 3
+    }
+  }
+}

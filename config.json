@@ -2,9 +2,9 @@
   "env": "development",
   "httpPort": 8080,
   "licensePath": "license.json",
-  "llmProvider": "echo",
+  "llmProvider": "openai",
   "llmConfig": {
-    "apiKeyEnv": "OPENAI_API_KEY"
+    "openai_key": ""
   },
   "formSchema": "forms/schema_v1.json",
   "outputDir": "output",

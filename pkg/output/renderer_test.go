@@ -1,7 +1,7 @@
 package output
 
 import (
-	"strings"
+	"bytes"
 	"testing"
 )
 
@@ -11,18 +11,23 @@ func TestToHTML_Basic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(html, "<strong>bold</strong>") {
+	if !bytes.Contains([]byte(html), []byte("<strong>bold</strong>")) {
 		t.Errorf("expected HTML to contain <strong>bold</strong>, got %q", html)
 	}
 }
 
-func TestToPDF_Stub(t *testing.T) {
+func TestToPDF_ValidPDF(t *testing.T) {
 	r := NewRenderer()
-	_, err := r.ToPDF("anything")
-	if err == nil {
-		t.Fatal("expected error from ToPDF stub, got nil")
+	pdf, err := r.ToPDF("Hello PDF")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if err.Error() != "PDF generation not implemented" {
-		t.Errorf("unexpected error message: %v", err)
+	// Must start with PDF header
+	if !bytes.HasPrefix(pdf, []byte("%PDF")) {
+		t.Errorf("PDF should start with %%PDF, got %q...", pdf[:4])
+	}
+	// And must be non-trivially sized
+	if len(pdf) < 200 {
+		t.Errorf("PDF size too small: %d bytes", len(pdf))
 	}
 }

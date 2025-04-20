@@ -1,0 +1,3406 @@
+Project Scan Summary
+Generated: Sun Apr 20 10:14:12 EDT 2025
+Max File Size Limit Applied: 10MB
+*** Automatic binary file content detection is DISABLED ***
+
+Excluded Directories (Entirely Skipped):
+  ./.git
+  ./node_modules
+  ./vendor
+  ./build
+  ./dist
+  ./target
+  ./__pycache__
+  ./*.egg-info
+  ./output
+Excluded File Patterns (Content Skipped):
+  *.log
+  *.tmp
+  *.swp
+  *.swo
+  *.pyc
+  *.class
+  *.o
+  *.a
+  *.so
+  *.dll
+  *.exe
+  *.png
+  *.jpg
+  *.jpeg
+  *.gif
+  *.bmp
+  *.tiff
+  *.ico
+  *.pdf
+  *.zip
+  *.tar.gz
+  *.tgz
+  *.rar
+  *.jar
+  *.war
+  *.DS_Store
+  *.db
+  *.bak
+  *.ttf
+  generate_project_summary.sh
+  single.txt
+
+--- Project Directory Structure ---
+(Lists all files/dirs not inside explicitly excluded directories)
+
+.
+./.DS_Store
+./.github
+./.github/workflows
+./.github/workflows/ci.yml
+./Dockerfile
+./Makefile
+./assets
+./assets/.DS_Store
+./assets/fonts
+./assets/fonts/DejaVuSans.ttf
+./build.sh
+./cmd
+./cmd/.DS_Store
+./cmd/dynamic-example
+./cmd/dynamic-example/.DS_Store
+./cmd/dynamic-example/main.go
+./cmd/dynamic-example/templates
+./cmd/dynamic-example/templates/dynamic_form.html
+./cmd/dynamic-example/templates/prompt_form.html
+./cmd/example
+./cmd/example/main.go
+./cmd/process-example
+./cmd/process-example/.DS_Store
+./cmd/process-example/main.go
+./cmd/process-example/templates
+./cmd/process-example/templates/form_demo.html
+./cmd/process-example/templates/prompt_form.html
+./cmd/process-example/templates/tailwind_alpine_form.html
+./config.json
+./config.json.bak
+./current.txt
+./definitions
+./definitions/accountingClassifier.json
+./definitions/completenessProcess.json
+./definitions/complexProcess.json
+./definitions/userSummary.json
+./demo-embed
+./demo-process
+./docs
+./docs/README.md
+./docs/sample-config.json
+./fly.toml
+./forms
+./forms/schema_v1.json
+./generate_project_summary.sh
+./go.mod
+./go.sum
+./internal
+./internal/util
+./license.json
+./llm_prompts.enc
+./pkg
+./pkg/.DS_Store
+./pkg/config
+./pkg/config/config.go
+./pkg/config/config_test.go
+./pkg/form
+./pkg/form/definitions.go
+./pkg/form/engine.go
+./pkg/form/engine_test.go
+./pkg/license
+./pkg/license/validator.go
+./pkg/license/validator_test.go
+./pkg/llm
+./pkg/llm/llm.go
+./pkg/llm/llm_test.go
+./pkg/llm/offline_client.go
+./pkg/llm/openai_client.go
+./pkg/metrics
+./pkg/metrics/metrics.go
+./pkg/output
+./pkg/output/.DS_Store
+./pkg/output/fonts
+./pkg/output/fonts/DejaVuSans.ttf
+./pkg/output/renderer.go
+./pkg/output/renderer_test.go
+./pkg/security
+./pkg/security/crypto.go
+./pkg/security/crypto_test.go
+./pkg/storage
+./pkg/storage/storage.go
+./pkg/storage/storage_test.go
+./prompts.enc
+./scripts
+./scripts/embed-font.sh
+./single.txt
+./templates
+./templates/tailwind_alpine_form.html
+./test_all.sh
+
+--- End Directory Structure ---
+
+
+--- File Contents ---
+
+--- File: ./cmd/.DS_Store ---
+[Content SKIPPED (filename '.DS_Store' matches exclude pattern: *.DS_Store)]
+--- End File: ./cmd/.DS_Store ---
+
+--- File: ./cmd/example/main.go ---
+// cmd/example/main.go
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"html/template"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+
+	"github.com/adi-ber/vjal-platform/pkg/config"
+	"github.com/adi-ber/vjal-platform/pkg/form"
+	"github.com/adi-ber/vjal-platform/pkg/license"
+	"github.com/adi-ber/vjal-platform/pkg/llm"
+	_ "github.com/adi-ber/vjal-platform/pkg/metrics"
+	"github.com/adi-ber/vjal-platform/pkg/output"
+	"github.com/adi-ber/vjal-platform/pkg/storage"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+// processRequest is the JSON payload for our /process endpoint.
+type processRequest struct {
+	PromptKey string                 `json:"promptKey"`
+	Data      map[string]interface{} `json:"data"`
+	Format    string                 `json:"format"` // "html" or "pdf"
+}
+
+func main() {
+	// 1) Load configuration
+	cfg, err := config.Load("config.json")
+	if err != nil {
+		log.Fatalf("config load error: %v", err)
+	}
+
+	// 1a) Ensure output directory exists
+	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
+		log.Fatalf("failed to create output dir %q: %v", cfg.OutputDir, err)
+	}
+
+	// 2) Load all form definitions from definitions/
+	formDefs, err := form.LoadDefinitionsDir("definitions")
+	if err != nil {
+		log.Fatalf("cannot load form definitions: %v", err)
+	}
+
+	// 3) Load LLM prompts
+	promptBytes, err := ioutil.ReadFile("llm_prompts.enc")
+	if err != nil {
+		log.Fatalf("failed to read llm_prompts.enc: %v", err)
+	}
+	var promptTemplates map[string]string
+	if err := json.Unmarshal(promptBytes, &promptTemplates); err != nil {
+		log.Fatalf("invalid JSON in llm_prompts.enc: %v", err)
+	}
+
+	// 4) Validate license
+	validator := license.NewValidator(cfg)
+	lic, err := validator.Validate(context.Background())
+	if err != nil {
+		log.Fatalf("license validation failed: %v", err)
+	}
+
+	// 5) Initialize storage (for form state, unused here but required)
+	if _, err := storage.New(filepath.Join(cfg.OutputDir, "state.db")); err != nil {
+		log.Fatalf("storage init error: %v", err)
+	}
+
+	// 6) Initialize LLM client & renderer
+	ai, err := llm.New(cfg, lic)
+	if err != nil {
+		log.Fatalf("LLM init error: %v", err)
+	}
+	renderer := output.NewRenderer()
+
+	// 7) Parse our prompt‚M-^@M-^Qform template
+	promptFormTmpl := template.Must(template.ParseFiles(
+		"cmd/example/templates/prompt_form.html",
+	))
+
+	// --- Serve the prompt‚M-^@M-^Qdriven form ---
+	http.HandleFunc("/prompt-form", func(w http.ResponseWriter, r *http.Request) {
+		key := r.URL.Query().Get("promptKey")
+		fields, ok := formDefs[key]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		fieldsJSON, _ := json.Marshal(fields)
+		data := struct {
+			PromptFieldsJSON template.JS
+		}{
+			PromptFieldsJSON: template.JS(fieldsJSON),
+		}
+		w.Header().Set("Content-Type", "text/html")
+		if err := promptFormTmpl.Execute(w, data); err != nil {
+			log.Printf("[prompt-form] template exec error: %v", err)
+		}
+	})
+
+	// --- Process form ‚M-^FM-^R prompt ‚M-^FM-^R LLM ‚M-^FM-^R HTML or PDF ---
+	http.HandleFunc("/process", func(w http.ResponseWriter, r *http.Request) {
+		var req processRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		// 1) Lookup prompt template
+		tpl, ok := promptTemplates[req.PromptKey]
+		if !ok {
+			http.Error(w, "unknown promptKey", http.StatusBadRequest)
+			return
+		}
+
+		// 2) Render the prompt by merging in user data
+		var buf bytes.Buffer
+		t := template.Must(template.New("p").Parse(tpl))
+		if err := t.Execute(&buf, req.Data); err != nil {
+			http.Error(w, fmt.Sprintf("prompt render error: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// 3) Call the LLM
+		aiResp, err := ai.Prompt(context.Background(), buf.String())
+		if err != nil {
+			http.Error(w, fmt.Sprintf("LLM error: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// 4) Return in requested format
+		switch req.Format {
+		case "html":
+			out, err := renderer.ToHTML(aiResp)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("HTML render error: %v", err), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte(out))
+
+		default: // pdf
+			pdf, err := renderer.ToPDF(aiResp)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("PDF error: %v", err), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/pdf")
+			w.Header().Set("Content-Disposition", "attachment; filename=\"result.pdf\"")
+			w.Write(pdf)
+		}
+	})
+
+	// --- Metrics & health ---
+	http.Handle("/metrics", promhttp.Handler())
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "OK")
+	})
+
+	// --- Start server ---
+	addr := fmt.Sprintf(":%d", cfg.HTTPPort)
+	log.Printf("starting example server on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, nil))
+}
+
+--- End File: ./cmd/example/main.go ---
+
+--- File: ./cmd/process-example/.DS_Store ---
+[Content SKIPPED (filename '.DS_Store' matches exclude pattern: *.DS_Store)]
+--- End File: ./cmd/process-example/.DS_Store ---
+
+--- File: ./cmd/process-example/templates/tailwind_alpine_form.html ---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <!-- Tailwind CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3/dist/tailwind.min.css" rel="stylesheet"/>
+  <!-- Alpine.js -->
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js" defer></script>
+  <title>Schema‚M-^@M-^QDriven Demo Form</title>
+</head>
+<body class="bg-gray-100 p-4">
+  <div x-data="formApp()" class="max-w-xl mx-auto bg-white p-6 rounded shadow">
+    <h1 class="text-2xl font-bold mb-4">Demo Form</h1>
+
+    <!-- Render each field from the first page -->
+    <template x-for="field in schema.pages[0].fields" :key="field.id">
+      <div class="mb-4">
+        <label class="block font-medium mb-1" x-text="field.label"></label>
+        <input
+          :type="field.type"
+          :name="field.id"
+          x-model="values[field.id]"
+          class="w-full border rounded px-3 py-2"
+        />
+      </div>
+    </template>
+
+    <button
+      @click="submit('pdf')"
+      class="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700"
+    >
+      Download PDF
+    </button>
+
+    <div id="out" class="mt-6 text-red-600"></div>
+  </div>
+
+  <script>
+    function formApp() {
+      return {
+        // These two will be injected by Go:
+        schema: {{ .SchemaJSON }},
+        promptKey: "{{ index .PromptKeys 0 }}",
+        values: {},
+        submit(format) {
+          fetch('/process', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+              promptKey: this.promptKey,
+              data: this.values,
+              format: format
+            })
+          })
+          .then(r => {
+            if (!r.ok) throw new Error(r.statusText);
+            return format==='pdf' ? r.blob() : r.text();
+          })
+          .then(resp => {
+            if (format==='pdf') {
+              const url = URL.createObjectURL(resp);
+              const a = document.createElement('a');
+              a.href = url; a.download = 'result.pdf';
+              document.body.appendChild(a);
+              a.click();
+              URL.revokeObjectURL(url);
+            } else {
+              document.getElementById('out').innerHTML = resp;
+            }
+          })
+          .catch(e => alert('Error: '+e));
+        }
+      }
+    }
+  </script>
+</body>
+</html>
+
+--- End File: ./cmd/process-example/templates/tailwind_alpine_form.html ---
+
+--- File: ./cmd/process-example/templates/prompt_form.html ---
+<!DOCTYPE html>
+<html lang="en" x-data="formPromptApp()" x-init="init()">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js" defer></script>
+  <title>Prompt‚M-^@M-^QDriven Form</title>
+</head>
+<body class="bg-gray-100 p-4 flex items-center justify-center min-h-screen">
+  <div class="bg-white w-full max-w-xl p-8 rounded-lg shadow">
+    <h1 class="text-2xl font-bold mb-4 capitalize" x-text="promptKey"></h1>
+
+    <template x-if="error">
+      <div class="mb-4 p-3 bg-red-50 text-red-700 rounded" x-text="error"></div>
+    </template>
+
+    <form @submit.prevent="submit" class="space-y-4">
+      <template x-for="f in fields" :key="f.id">
+        <div>
+          <label class="block font-medium text-gray-700" :for="f.id" x-text="f.label"></label>
+          <input
+            :type="f.type"
+            :id="f.id"
+            :name="f.id"
+            x-model="values[f.id]"
+            class="mt-1 block w-full rounded border-gray-300 shadow-sm
+                   focus:border-blue-500 focus:ring focus:ring-blue-200 focus:ring-opacity-50"
+          />
+        </div>
+      </template>
+
+      <button
+        type="submit"
+        :disabled="loading || !valid()"
+        class="w-full py-2 bg-blue-600 text-white rounded hover:bg-blue-700 
+               focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+      >
+        <span x-show="!loading">Send to LLM & Download PDF</span>
+        <span x-show="loading">Processing‚M-^@¶</span>
+      </button>
+    </form>
+  </div>
+
+  <script>
+    function formPromptApp() {
+      return {
+        promptKey: new URLSearchParams(location.search).get('promptKey') || '',
+        fields: [],
+        values: {},
+        loading: false,
+        error: '',
+
+        init() {
+          this.fields = PROMPT_FIELDS[this.promptKey] || [];
+          this.fields.forEach(f => { this.values[f.id] = ''; });
+        },
+
+        valid() {
+          return this.fields.every(f => this.values[f.id] !== '');
+        },
+
+        async submit() {
+          this.error = '';
+          if (!this.valid()) return;
+          this.loading = true;
+          try {
+            const res = await fetch('/process', {
+              method: 'POST',
+              headers: {'Content-Type':'application/json'},
+              body: JSON.stringify({
+                promptKey: this.promptKey,
+                data: this.values,
+                format: 'pdf'
+              })
+            });
+            if (!res.ok) {
+              this.error = await res.text();
+            } else {
+              const blob = await res.blob();
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url; a.download = 'result.pdf';
+              document.body.appendChild(a); a.click();
+              URL.revokeObjectURL(url);
+            }
+          } catch(e) {
+            this.error = e.message || e;
+          } finally {
+            this.loading = false;
+          }
+        }
+      }
+    }
+
+    const PROMPT_FIELDS = {"accountingClassifier":[{"id":"description","label":"Description","type":"text"},{"id":"amount","label":"Amount","type":"number"}],"userSummary":[{"id":"name","label":"Name","type":"text"},{"id":"age","label":"Age","type":"number"}]};
+  </script>
+</body>
+</html>
+
+--- End File: ./cmd/process-example/templates/prompt_form.html ---
+
+--- File: ./cmd/process-example/templates/form_demo.html ---
+<!DOCTYPE html>
+<html lang="en" x-data="formApp()">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js" defer></script>
+  <title>Schema‚M-^@M-^QDriven Demo Form</title>
+</head>
+<body class="bg-gray-100 p-4 flex items-center justify-center min-h-screen">
+  <div class="bg-white w-full max-w-2xl p-8 rounded-lg shadow">
+    <h1 class="text-3xl font-semibold mb-6 text-center">Demo Form</h1>
+    <template x-if="error">
+      <div class="mb-4 p-3 bg-red-50 text-red-700 rounded" x-text="error"></div>
+    </template>
+    <form @submit.prevent="submit('pdf')" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <template x-for="field in schema.pages[0].fields" :key="field.id">
+        <div>
+          <label class="block text-sm font-medium mb-1" :for="field.id" x-text="field.label"></label>
+          <input
+            :type="field.type"
+            :id="field.id"
+            :name="field.id"
+            x-model="values[field.id]"
+            :placeholder="field.label"
+            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm
+                   focus:border-blue-500 focus:ring focus:ring-blue-200 focus:ring-opacity-50"
+          />
+        </div>
+      </template>
+      <div class="md:col-span-2 flex justify-end mt-4">
+        <button
+          type="submit"
+          :disabled="!isValid() || loading"
+          class="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+        >
+          <template x-if="loading">
+            <svg class="animate-spin h-5 w-5 mr-2 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+            </svg>
+          </template>
+          <span x-text="loading ? 'Processing‚M-^@¶' : 'Download PDF'"></span>
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    function formApp() {
+      return {
+        schema: {{ .SchemaJSON }},
+        promptKey: "{{ index .PromptKeys 0 }}",
+        values: {},
+        loading: false,
+        error: '',
+        isValid() {
+          return this.schema.pages[0].fields.every(f => {
+            const v = this.values[f.id];
+            return v !== undefined && v !== null && v !== '';
+          });
+        },
+        submit(format) {
+          this.error = '';
+          if (!this.isValid()) return;
+          this.loading = true;
+          fetch('/process', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({promptKey: this.promptKey, data: this.values, format})
+          })
+          .then(async r => {
+            this.loading = false;
+            if (!r.ok) throw new Error(await r.text() || r.statusText);
+            return r.blob();
+          })
+          .then(blob => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'result.pdf';
+            document.body.appendChild(a); a.click();
+            URL.revokeObjectURL(url);
+          })
+          .catch(e => { this.loading = false; this.error = e.message; });
+        }
+      }
+    }
+  </script>
+</body>
+</html>
+
+--- End File: ./cmd/process-example/templates/form_demo.html ---
+
+--- File: ./cmd/process-example/main.go ---
+package main
+
+import (
+  "bytes"
+  "context"
+  "encoding/json"
+  "fmt"
+  "html/template"
+  "io/ioutil"
+  "log"
+  "net/http"
+  "os"
+  "path/filepath"
+
+  "github.com/adi-ber/vjal-platform/pkg/config"
+  "github.com/adi-ber/vjal-platform/pkg/license"
+  "github.com/adi-ber/vjal-platform/pkg/llm"
+  _ "github.com/adi-ber/vjal-platform/pkg/metrics"
+  "github.com/adi-ber/vjal-platform/pkg/output"
+  "github.com/adi-ber/vjal-platform/pkg/storage"
+  "github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+// promptTemplates holds your IP‚M-^@M-^Qprotected prompt strings.
+var promptTemplates = map[string]string{
+  "accountingClassifier": `You are a financial classifier.
+Description: {{.description}}
+Amount: {{.amount}}
+Answer:`,
+  "userSummary": `Form submission summary:
+Name: {{.name}}
+Age: {{.age}}
+Answer:`,
+}
+
+// PromptField describes one variable the prompt expects.
+type PromptField struct {
+  ID    string `json:"id"`
+  Label string `json:"label"`
+  Type  string `json:"type"`
+}
+
+// promptFields defines, for each promptKey, the fields to render.
+var promptFields = map[string][]PromptField{
+  "accountingClassifier": {
+    {ID: "description", Label: "Description", Type: "text"},
+    {ID: "amount",       Label: "Amount",      Type: "number"},
+  },
+  "userSummary": {
+    {ID: "name", Label: "Name", Type: "text"},
+    {ID: "age",  Label: "Age",  Type: "number"},
+  },
+}
+
+// processRequest defines the JSON payload for /process.
+type processRequest struct {
+  PromptKey string                 `json:"promptKey"`
+  Data      map[string]interface{} `json:"data"`
+  Format    string                 `json:"format"`
+}
+
+// formTmpl parses the HTML template for the generic schema‚M-^@M-^Qdriven form.
+var formTmpl = template.Must(template.ParseFiles(
+  "cmd/process-example/templates/form_demo.html",
+))
+
+// promptFormTmpl parses the HTML template for prompt‚M-^@M-^Qdriven forms.
+var promptFormTmpl = template.Must(template.ParseFiles(
+  "cmd/process-example/templates/prompt_form.html",
+))
+
+func main() {
+  // 1) Load configuration
+  cfg, err := config.Load("config.json")
+  if err != nil {
+    log.Fatalf("config load error: %v", err)
+  }
+
+  // 2) Ensure output directory exists
+  if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
+    log.Fatalf("failed to create output dir: %v", err)
+  }
+
+  // 3) Validate license
+  validator := license.NewValidator(cfg)
+  lic, err := validator.Validate(context.Background())
+  if err != nil {
+    log.Fatalf("license validation failed: %v", err)
+  }
+
+  // 4) Initialize storage (unused here but required)
+  if _, err := storage.New(filepath.Join(cfg.OutputDir, "state.db")); err != nil {
+    log.Fatalf("storage init error: %v", err)
+  }
+
+  // 5) Initialize LLM and renderer
+  ai, err := llm.New(cfg, lic)
+  if err != nil {
+    log.Fatalf("LLM init error: %v", err)
+  }
+  renderer := output.NewRenderer()
+
+  // 6) Serve the generic schema‚M-^@M-^Qdriven form
+  http.HandleFunc("/form-demo", func(w http.ResponseWriter, r *http.Request) {
+    schemaBytes, err := ioutil.ReadFile("forms/schema_v1.json")
+    if err != nil {
+      http.Error(w, "failed to read schema", http.StatusInternalServerError)
+      return
+    }
+    data := struct {
+      SchemaJSON template.JS
+      PromptKeys []string
+    }{
+      SchemaJSON: template.JS(schemaBytes),
+      PromptKeys: []string{"accountingClassifier", "userSummary"},
+    }
+    w.Header().Set("Content-Type", "text/html")
+    if err := formTmpl.Execute(w, data); err != nil {
+      log.Printf("[form-demo] template error: %v", err)
+    }
+  })
+
+  // 6b) Serve a prompt‚M-^@M-^Qdriven form at /prompt-form
+  http.HandleFunc("/prompt-form", func(w http.ResponseWriter, r *http.Request) {
+    fieldsJSON, err := json.Marshal(promptFields)
+    if err != nil {
+      http.Error(w, "failed to encode fields", http.StatusInternalServerError)
+      return
+    }
+    data := struct {
+      PromptFieldsJSON template.JS
+    }{
+      PromptFieldsJSON: template.JS(fieldsJSON),
+    }
+    w.Header().Set("Content-Type", "text/html")
+    if err := promptFormTmpl.Execute(w, data); err != nil {
+      log.Printf("[prompt-form] template error: %v", err)
+    }
+  })
+
+  // 7) Process endpoint with detailed logging
+  http.HandleFunc("/process", func(w http.ResponseWriter, r *http.Request) {
+    var req processRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+      log.Printf("[process] JSON decode error: %v", err)
+      http.Error(w, err.Error(), http.StatusBadRequest)
+      return
+    }
+
+    tmplStr, ok := promptTemplates[req.PromptKey]
+    if !ok {
+      err := fmt.Errorf("unknown promptKey %q", req.PromptKey)
+      log.Printf("[process] %v", err)
+      http.Error(w, err.Error(), http.StatusBadRequest)
+      return
+    }
+
+    var buf bytes.Buffer
+    tmpl := template.Must(template.New("p").Parse(tmplStr))
+    if err := tmpl.Execute(&buf, req.Data); err != nil {
+      log.Printf("[process] template exec error: %v", err)
+      http.Error(w, err.Error(), http.StatusInternalServerError)
+      return
+    }
+
+    aiResp, err := ai.Prompt(context.Background(), buf.String())
+    if err != nil {
+      log.Printf("[process] LLM error: %v", err)
+      http.Error(w, err.Error(), http.StatusInternalServerError)
+      return
+    }
+
+    switch req.Format {
+    case "md":
+      w.Header().Set("Content-Type", "text/markdown")
+      w.Write([]byte(aiResp))
+
+    case "html":
+      htmlOut, err := renderer.ToHTML(aiResp)
+      if err != nil {
+        log.Printf("[process] HTML render error: %v", err)
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+      }
+      w.Header().Set("Content-Type", "text/html")
+      w.Write([]byte(htmlOut))
+
+    default: // PDF
+      pdfBytes, err := renderer.ToPDF(aiResp)
+      if err != nil {
+        log.Printf("[process] PDF render error: %v", err)
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+      }
+      w.Header().Set("Content-Type", "application/pdf")
+      w.Header().Set("Content-Disposition", "attachment; filename=\"result.pdf\"")
+      w.Write(pdfBytes)
+    }
+  })
+
+  // 8) Metrics & health endpoints
+  http.Handle("/metrics", promhttp.Handler())
+  http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusOK)
+    fmt.Fprintln(w, "OK")
+  })
+
+  // 9) Start the HTTP server
+  addr := fmt.Sprintf(":%d", cfg.HTTPPort)
+  log.Printf("listening on %s", addr)
+  log.Fatal(http.ListenAndServe(addr, nil))
+}
+
+--- End File: ./cmd/process-example/main.go ---
+
+--- File: ./cmd/dynamic-example/.DS_Store ---
+[Content SKIPPED (filename '.DS_Store' matches exclude pattern: *.DS_Store)]
+--- End File: ./cmd/dynamic-example/.DS_Store ---
+
+--- File: ./cmd/dynamic-example/templates/prompt_form.html ---
+<!DOCTYPE html>
+<html lang="en" x-data="formPromptApp()" x-init="init()">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js" defer></script>
+  <title>Dynamic Multi‚M-^@M-^QStep Form</title>
+</head>
+<body class="bg-gray-100 p-4 flex items-center justify-center min-h-screen">
+  <div class="bg-white w-full max-w-xl p-8 rounded-lg shadow">
+    <h1 class="text-2xl font-bold mb-4 capitalize" x-text="promptKey"></h1>
+    <template x-if="error">
+      <div class="mb-4 p-3 bg-red-50 text-red-700 rounded" x-text="error"></div>
+    </template>
+    <form @submit.prevent="submit" class="space-y-4">
+      <template x-for="(f,i) in fields" :key="i">
+        <div>
+          <label class="block font-medium text-gray-700" :for="f.id" x-text="f.label"></label>
+          <input type="text"
+                 :id="f.id"
+                 x-model="values[f.id]"
+                 class="mt-1 block w-full rounded border-gray-300 shadow-sm"/>
+        </div>
+      </template>
+      <button type="submit"
+              :disabled="loading || !allAnswered()"
+              class="w-full py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+        <span x-show="!loading">Next</span>
+        <span x-show="loading">‚M-^@¶</span>
+      </button>
+    </form>
+  </div>
+
+  <script>
+    function formPromptApp() {
+      return {
+        promptKey: new URLSearchParams(location.search).get('promptKey'),
+        fields: [], values: {}, round: 0, maxRounds: 3, loading: false, error: '',
+        init() {
+          this.fields = PROMPT_FIELDS[this.promptKey] || []
+          this.maxRounds = this.fields[0]?.maxRounds || 3
+          this.fields.forEach(f => this.values[f.id] = '')
+        },
+        allAnswered() {
+          return this.fields.every(f => this.values[f.id]?.trim())
+        },
+        async submit() {
+          this.error = ''; this.loading = true
+          try {
+            const res = await fetch('/process',{method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({
+                promptKey:this.promptKey,
+                data:this.values,
+                round:this.round,
+                maxRounds:this.maxRounds
+              })
+            })
+            if(!res.ok) throw await res.text()
+            const p = await res.json()
+            if(p.nextQuestions?.length){
+              p.nextQuestions.forEach((q,i)=>{
+                const id = this.round + '-' + i
+                this.fields.push({id,label:q})
+                this.values[id] = ''
+              })
+              this.round = p.round
+            } else {
+              // final HTML
+              const html = await res.text()
+              document.write(html)
+            }
+          } catch(e){
+            this.error = e.toString()
+          } finally { this.loading=false }
+        }
+      }
+    }
+    const PROMPT_FIELDS = {{ .PromptFieldsJSON }}
+  </script>
+</body>
+</html>
+
+--- End File: ./cmd/dynamic-example/templates/prompt_form.html ---
+
+--- File: ./cmd/dynamic-example/templates/dynamic_form.html ---
+<!DOCTYPE html>
+<html lang="en" x-data="dynamicFormApp()" x-init="init()">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js" defer></script>
+  <title>Dynamic, Multi‚M-^@M-^QStep Form</title>
+</head>
+<body class="bg-gray-100 p-4 flex items-center justify-center min-h-screen">
+  <div class="bg-white w-full max-w-2xl p-8 rounded-lg shadow">
+    <h1 class="text-3xl font-bold mb-6">Dynamic, Multi‚M-^@M-^QStep Form</h1>
+
+    <template x-if="error">
+      <div class="mb-4 p-3 bg-red-50 text-red-700 rounded" x-text="error"></div>
+    </template>
+
+    <template x-if="!completed">
+      <div class="space-y-6">
+        <template x-for="f in fields" :key="f.id">
+          <div>
+            <label class="block font-medium text-gray-800 mb-2" :for="f.id" x-text="f.label"></label>
+            <textarea
+              :id="f.id"
+              :name="f.id"
+              x-model="data[f.id]"
+              rows="6"
+              class="w-full border rounded-md p-2 text-lg"
+            ></textarea>
+          </div>
+        </template>
+        <button
+          @click="submit()"
+          :disabled="loading || !allAnswered()"
+          class="w-full py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+        >
+          <span x-show="!loading">Next</span>
+          <span x-show="loading">‚M-^@¶</span>
+        </button>
+      </div>
+    </template>
+
+    <template x-if="completed">
+      <div class="text-center space-y-4">
+        <p class="text-green-700 text-xl">‚M-^\M-^E All done after {{round}} rounds!</p>
+        <button
+          @click="downloadPDF()"
+          class="px-6 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+        >
+          Download PDF Report
+        </button>
+      </div>
+    </template>
+  </div>
+
+  <script>
+    function dynamicFormApp() {
+      return {
+        fields: [],
+        data: {},
+        round: 0,
+        maxRounds: 4,
+        loading: false,
+        completed: false,
+        error: '',
+
+        init() {
+          // INITIAL_FIELDS injected by Go
+          this.fields = INITIAL_FIELDS;
+          this.fields.forEach(f => { this.data[f.id] = ''; });
+        },
+
+        allAnswered() {
+          return this.fields.every(f => this.data[f.id].trim() !== '');
+        },
+
+        async submit() {
+          this.error = '';
+          if (!this.allAnswered()) return;
+          this.loading = true;
+
+          try {
+            const res = await fetch('/dynamic-process', {
+              method: 'POST',
+              headers: {'Content-Type':'application/json'},
+              body: JSON.stringify({
+                promptKey: 'dynamic',
+                data: this.data,
+                round: this.round,
+                maxRounds: this.maxRounds
+              })
+            });
+            const json = await res.json();
+            if (json.completed) {
+              this.completed = true;
+            } else {
+              this.round++;
+              this.fields = json.nextQuestions;
+              this.fields.forEach(f => this.data[f.id] = '');
+            }
+          } catch(e) {
+            this.error = e.message || 'Unknown error';
+          } finally {
+            this.loading = false;
+          }
+        },
+
+        async downloadPDF() {
+          try {
+            const res = await fetch('/dynamic-final', {
+              method: 'POST',
+              headers: {'Content-Type':'application/json'},
+              body: JSON.stringify({data: this.data})
+            });
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'dynamic_report.pdf';
+            document.body.appendChild(a); a.click();
+            URL.revokeObjectURL(url);
+          } catch(e) {
+            alert('Error downloading PDF: ' + e.message);
+          }
+        }
+      }
+    }
+
+    // injected by Go ‚M-^@M-^S do *not* rename
+    const INITIAL_FIELDS = {{ .FieldsJSON }};
+  </script>
+</body>
+</html>
+
+--- End File: ./cmd/dynamic-example/templates/dynamic_form.html ---
+
+--- File: ./cmd/dynamic-example/main.go ---
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"html/template"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/adi-ber/vjal-platform/pkg/config"
+	"github.com/adi-ber/vjal-platform/pkg/license"
+	"github.com/adi-ber/vjal-platform/pkg/llm"
+	"github.com/adi-ber/vjal-platform/pkg/output"
+)
+
+// PromptField describes one question to render.
+type PromptField struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Type  string `json:"type"`
+}
+
+// DynamicRequest is sent by the frontend each round.
+type DynamicRequest struct {
+	PromptKey string            `json:"promptKey"`
+	Data      map[string]string `json:"data"`
+	Round     int               `json:"round"`
+	MaxRounds int               `json:"maxRounds"`
+}
+
+// DynamicResponse is returned by /dynamic-process.
+type DynamicResponse struct {
+	Completed     bool          `json:"completed"`
+	NextQuestions []PromptField `json:"nextQuestions"`
+}
+
+func mustJSON(v interface{}) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+func main() {
+	// 1) Load config & license
+	cfg, err := config.Load("config.json")
+	if err != nil {
+		log.Fatalf("config load error: %v", err)
+	}
+	lic, err := license.NewValidator(cfg).Validate(context.Background())
+	if err != nil {
+		log.Fatalf("license validation failed: %v", err)
+	}
+
+	// 2) Init LLM and PDF renderer
+	ai, err := llm.New(cfg, lic)
+	if err != nil {
+		log.Fatalf("LLM init error: %v", err)
+	}
+	renderer := output.NewRenderer()
+
+	// 3) Ensure output dir exists
+	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
+		log.Fatalf("failed to create output dir: %v", err)
+	}
+
+	// 4) Parse our dynamic form template
+	tmpl := template.Must(template.ParseFiles(
+		"cmd/dynamic-example/templates/dynamic_form.html",
+	))
+
+	// 5) GET /dynamic-form ‚M-^FM-^R initial question
+	http.HandleFunc("/dynamic-form", func(w http.ResponseWriter, r *http.Request) {
+		initial := []PromptField{
+			{ID: "process", Label: "Describe your end‚M-^@M-^Qto‚M-^@M-^Qend process", Type: "textarea"},
+		}
+		w.Header().Set("Content-Type", "text/html")
+		tmpl.Execute(w, struct{ FieldsJSON template.JS }{
+			FieldsJSON: template.JS(mustJSON(initial)),
+		})
+	})
+
+	// 6) POST /dynamic-process ‚M-^FM-^R nextQuestions or completed flag
+	http.HandleFunc("/dynamic-process", func(w http.ResponseWriter, r *http.Request) {
+		var req DynamicRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+
+		// enforce max rounds
+		if req.Round >= req.MaxRounds {
+			json.NewEncoder(w).Encode(DynamicResponse{Completed: true})
+			return
+		}
+
+		// build prompt from all previous answers
+		var sb string
+		for k, v := range req.Data {
+			sb += fmt.Sprintf("%s: %s\n\n", k, v)
+		}
+		sb += "Given the above, what is the *one* next question I should answer to fill any missing details?"
+
+		aiResp, err := ai.Prompt(r.Context(), sb)
+		if err != nil {
+			http.Error(w, "LLM error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		next := []PromptField{{
+			ID:    fmt.Sprintf("followup_%d", req.Round),
+			Label: aiResp,
+			Type:  "textarea",
+		}}
+
+		json.NewEncoder(w).Encode(DynamicResponse{
+			Completed:     false,
+			NextQuestions: next,
+		})
+	})
+
+	// 7) POST /dynamic-final ‚M-^FM-^R bundle all answers, save JSON, return PDF
+	http.HandleFunc("/dynamic-final", func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Data map[string]string }
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		// persist raw JSON
+		ts := time.Now().Format("20060102_150405")
+		outFile := fmt.Sprintf("%s/dynamic_%s.json", cfg.OutputDir, ts)
+		if jb, err := json.MarshalIndent(req.Data, "", "  "); err == nil {
+			_ = ioutil.WriteFile(outFile, jb, 0o644)
+		} else {
+			log.Println("failed to save JSON:", err)
+		}
+
+		// build Markdown report
+		md := "# Dynamic Form Report\n\n"
+		for k, v := range req.Data {
+			md += fmt.Sprintf("**%s**: %s\n\n", k, v)
+		}
+
+		pdfBytes, err := renderer.ToPDF(md)
+		if err != nil {
+			http.Error(w, "PDF generation error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// send as download
+		w.Header().Set("Content-Type", "application/pdf")
+		w.Header().Set("Content-Disposition", "attachment; filename=\"dynamic_report.pdf\"")
+		w.Write(pdfBytes)
+	})
+
+	log.Println("listening on :8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+--- End File: ./cmd/dynamic-example/main.go ---
+
+--- File: ./go.mod ---
+module github.com/adi-ber/vjal-platform
+
+go 1.24.1
+
+require (
+	github.com/go-fonts/dejavu v0.3.4
+	github.com/jung-kurt/gofpdf v1.16.2
+	github.com/openai/openai-go v0.1.0-beta.10
+	github.com/prometheus/client_golang v1.22.0
+	github.com/yuin/goldmark v1.7.10
+	golang.org/x/crypto v0.37.0
+	modernc.org/sqlite v1.37.0
+)
+
+require (
+	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/ncruces/go-strftime v0.1.9 // indirect
+	github.com/prometheus/client_model v0.6.1 // indirect
+	github.com/prometheus/common v0.62.0 // indirect
+	github.com/prometheus/procfs v0.15.1 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/tidwall/gjson v1.14.4 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
+	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
+	golang.org/x/sys v0.32.0 // indirect
+	google.golang.org/protobuf v1.36.5 // indirect
+	modernc.org/libc v1.62.1 // indirect
+	modernc.org/mathutil v1.7.1 // indirect
+	modernc.org/memory v1.9.1 // indirect
+)
+
+--- End File: ./go.mod ---
+
+--- File: ./.DS_Store ---
+[Content SKIPPED (filename '.DS_Store' matches exclude pattern: *.DS_Store)]
+--- End File: ./.DS_Store ---
+
+--- File: ./forms/schema_v1.json ---
+{
+  "pages": [
+    {
+      "id": "start",
+      "fields": [
+        { "id": "name",  "label": "Your Name", "type": "text"   },
+        { "id": "age",   "label": "Your Age",  "type": "number" }
+      ]
+    }
+  ]
+}
+
+--- End File: ./forms/schema_v1.json ---
+
+--- File: ./generate_project_summary.sh ---
+[Content SKIPPED (filename 'generate_project_summary.sh' matches exclude pattern: generate_project_summary.sh)]
+--- End File: ./generate_project_summary.sh ---
+
+--- File: ./Dockerfile ---
+# syntax=docker/dockerfile:1
+
+#### 1. Module download & cache ####
+FROM golang:1.24-bullseye AS modcache
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+#### 2. Builder (stripped binary) ####
+FROM modcache AS builder
+WORKDIR /app
+COPY . .
+# Build static, strip symbols
+RUN CGO_ENABLED=0 go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o vjal-app \
+    ./cmd/example
+
+#### 3. Compressor ####
+FROM builder AS compressor
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends upx \
+ && upx --fast vjal-app \
+ && rm -rf /var/lib/apt/lists/*
+
+#### 4. Final image ####
+FROM scratch
+# Compressed, stripped binary
+COPY --from=compressor /app/vjal-app /vjal-app
+# Runtime assets
+COPY --from=builder /app/config.json  /config.json
+COPY --from=builder /app/license.json /license.json
+COPY --from=builder /app/forms        /forms
+COPY --from=builder /app/output       /output
+
+ENTRYPOINT ["/vjal-app"]
+
+--- End File: ./Dockerfile ---
+
+--- File: ./Makefile ---
+.PHONY: all fmt test docker-build offline-zip
+
+all: fmt test
+
+fmt:
+	go fmt ./...
+
+test:
+	go test ./...
+
+docker-build:
+	docker build -t adi-ber/vjal-platform:latest .
+
+offline-zip:
+	./build.sh
+
+--- End File: ./Makefile ---
+
+--- File: ./config.json ---
+{
+  "env": "development",
+  "httpPort": 8080,
+  "licensePath": "license.json",
+  "llmProvider": "openai",
+  "llmConfig": {
+    "openai_key": ""
+  },
+  "formSchema": "forms/schema_v1.json",
+  "outputDir": "output",
+  "metricsEndpoint": "http://localhost:9091"
+}
+
+--- End File: ./config.json ---
+
+--- File: ./llm_prompts.enc ---
+{
+  "accountingClassifier": "You are a financial classifier.\\nDescription: {{.description}}\\nAmount: {{.amount}}\\nAnswer:",
+  "userSummary": "Form submission summary:\\nName: {{.name}}\\nAge: {{.age}}\\nAnswer:"
+}
+
+--- End File: ./llm_prompts.enc ---
+
+--- File: ./go.sum ---
+github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
+github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
+github.com/boombuler/barcode v1.0.0/go.mod h1:paBWMcWSl3LHKBqUq+rly7CNSldXjb2rDl3JlRe0mD8=
+github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
+github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
+github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
+github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
+github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
+github.com/go-fonts/dejavu v0.3.4 h1:Qqyx9IOs5CQFxyWTdvddeWzrX0VNwUAvbmAzL0fpjbc=
+github.com/go-fonts/dejavu v0.3.4/go.mod h1:D1z0DglIz+lmpeNYMYlxW4r22IhcdOYnt+R3PShU/Kg=
+github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
+github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e h1:ijClszYn+mADRFY17kjQEVQ1XRhq2/JR1M3sGqeJoxs=
+github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e/go.mod h1:boTsfXsheKC2y+lKOCMpSfarhxDeIzfZG1jqGcPl3cA=
+github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/jung-kurt/gofpdf v1.0.0/go.mod h1:7Id9E/uU8ce6rXgefFLlgrJj/GYY22cpxn+r32jIOes=
+github.com/jung-kurt/gofpdf v1.16.2 h1:jgbatWHfRlPYiK85qgevsZTHviWXKwB1TTiKdz5PtRc=
+github.com/jung-kurt/gofpdf v1.16.2/go.mod h1:1hl7y57EsiPAkLbOwzpzqgx1A30nQCk/YmFV8S2vmK0=
+github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=
+github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
+github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0SNc=
+github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
+github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
+github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
+github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
+github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
+github.com/ncruces/go-strftime v0.1.9 h1:bY0MQC28UADQmHmaF5dgpLmImcShSi2kHU9XLdhx/f4=
+github.com/ncruces/go-strftime v0.1.9/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
+github.com/openai/openai-go v0.1.0-beta.10 h1:CknhGXe8aXQMRuqg255PFnWzgRY9nEryMxoNIBBM9tU=
+github.com/openai/openai-go v0.1.0-beta.10/go.mod h1:g461MYGXEXBVdV5SaR/5tNzNbSfwTBBefwc+LlDCK0Y=
+github.com/phpdave11/gofpdi v1.0.7/go.mod h1:vBmVV0Do6hSBHC8uKUQ71JGW+ZGQq74llk/7bXwjDoI=
+github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
+github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
+github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/prometheus/client_golang v1.22.0 h1:rb93p9lokFEsctTys46VnV1kLCDpVZ0a/Y92Vm0Zc6Q=
+github.com/prometheus/client_golang v1.22.0/go.mod h1:R7ljNsLXhuQXYZYtw6GAE9AZg8Y7vEW5scdCXrWRXC0=
+github.com/prometheus/client_model v0.6.1 h1:ZKSh/rekM+n3CeS952MLRAdFwIKqeY8b62p8ais2e9E=
+github.com/prometheus/client_model v0.6.1/go.mod h1:OrxVMOVHjw3lKMa8+x6HeMGkHMQyHDk9E3jmP2AmGiY=
+github.com/prometheus/common v0.62.0 h1:xasJaQlnWAeyHdUBeGjXmutelfJHWMRr+Fg4QszZ2Io=
+github.com/prometheus/common v0.62.0/go.mod h1:vyBcEuLSvWos9B1+CyL7JZ2up+uFzXhkqml0W5zIY1I=
+github.com/prometheus/procfs v0.15.1 h1:YagwOFzUgYfKKHX6Dr+sHT7km/hxC76UB0learggepc=
+github.com/prometheus/procfs v0.15.1/go.mod h1:fB45yRUv8NstnjriLhBQLuOUt+WW4BsoGhij/e3PBqk=
+github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=
+github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
+github.com/ruudk/golang-pdf417 v0.0.0-20181029194003-1af4ab5afa58/go.mod h1:6lfFZQK844Gfx8o5WFuvpxWRwnSoipWe/p622j1v06w=
+github.com/stretchr/testify v1.2.2/go.mod h1:a8OnRcib4nhh0OaRAV+Yts87kKdq0PP7pXfy6kDkUVs=
+github.com/stretchr/testify v1.10.0 h1:Xv5erBjTwe/5IxqUQTdXv5kgmIvbHo3QQyRwhJsOfJA=
+github.com/stretchr/testify v1.10.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
+github.com/tidwall/gjson v1.14.2/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=
+github.com/tidwall/gjson v1.14.4 h1:uo0p8EbA09J7RQaflQ1aBRffTR7xedD2bcIVSYxLnkM=
+github.com/tidwall/gjson v1.14.4/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=
+github.com/tidwall/match v1.1.1 h1:+Ho715JplO36QYgwN9PGYNhgZvoUSc9X2c80KVTi+GA=
+github.com/tidwall/match v1.1.1/go.mod h1:eRSPERbgtNPcGhD8UCthc6PmLEQXEWd3PRB5JTxsfmM=
+github.com/tidwall/pretty v1.2.0/go.mod h1:ITEVvHYasfjBbM0u2Pg8T2nJnzm8xPwvNhhsoaGGjNU=
+github.com/tidwall/pretty v1.2.1 h1:qjsOFOWWQl+N3RsoF5/ssm1pHmJJwhjlSbZ51I6wMl4=
+github.com/tidwall/pretty v1.2.1/go.mod h1:ITEVvHYasfjBbM0u2Pg8T2nJnzm8xPwvNhhsoaGGjNU=
+github.com/tidwall/sjson v1.2.5 h1:kLy8mja+1c9jlljvWTlSazM7cKDRfJuR/bOJhcY5NcY=
+github.com/tidwall/sjson v1.2.5/go.mod h1:Fvgq9kS/6ociJEDnK0Fk1cpYF4FIW6ZF7LAe+6jwd28=
+github.com/yuin/goldmark v1.7.10 h1:S+LrtBjRmqMac2UdtB6yyCEJm+UILZ2fefI4p7o0QpI=
+github.com/yuin/goldmark v1.7.10/go.mod h1:ip/1k0VRfGynBgxOz0yCqHrbZXhcjxyuS66Brc7iBKg=
+golang.org/x/crypto v0.37.0 h1:kJNSjF/Xp7kU0iB2Z+9viTPMW4EqqsrywMXLJOOsXSE=
+golang.org/x/crypto v0.37.0/go.mod h1:vg+k43peMZ0pUMhYmVAWysMK35e6ioLh3wB8ZCAfbVc=
+golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 h1:nDVHiLt8aIbd/VzvPWN6kSOPE7+F/fNFDSXLVYkE/Iw=
+golang.org/x/exp v0.0.0-20250305212735-054e65f0b394/go.mod h1:sIifuuw/Yco/y6yb6+bDNfyeQ/MdPUy/hKEMYQV17cM=
+golang.org/x/image v0.0.0-20190910094157-69e4b8554b2a/go.mod h1:FeLwcggjj3mMvU+oOTbSwawSJRM1uh48EjtB4UJZlP0=
+golang.org/x/mod v0.24.0 h1:ZfthKaKaT4NrhGVZHO1/WDTwGES4De8KtWO0SIbNJMU=
+golang.org/x/mod v0.24.0/go.mod h1:IXM97Txy2VM4PJ3gI61r1YEk/gAj6zAHN3AdZt6S9Ww=
+golang.org/x/sync v0.12.0 h1:MHc5BpPuC30uJk597Ri8TV3CNZcTLu6B6z4lJy+g6Jw=
+golang.org/x/sync v0.12.0/go.mod h1:1dzgHSNfp02xaA81J2MS99Qcpr2w7fw1gpm99rleRqA=
+golang.org/x/sys v0.6.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+golang.org/x/sys v0.32.0 h1:s77OFDvIQeibCmezSnk/q6iAfkdiQaJi4VzroCFrN20=
+golang.org/x/sys v0.32.0/go.mod h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=
+golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
+golang.org/x/tools v0.31.0 h1:0EedkvKDbh+qistFTd0Bcwe/YLh4vHwWEkiI0toFIBU=
+golang.org/x/tools v0.31.0/go.mod h1:naFTU+Cev749tSJRXJlna0T3WxKvb1kWEx15xA4SdmQ=
+google.golang.org/protobuf v1.36.5 h1:tPhr+woSbjfYvY6/GPufUoYizxw1cF/yFoxJ2fmpwlM=
+google.golang.org/protobuf v1.36.5/go.mod h1:9fA7Ob0pmnwhb644+1+CVWFRbNajQ6iRojtC/QF5bRE=
+gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+modernc.org/cc/v4 v4.25.2 h1:T2oH7sZdGvTaie0BRNFbIYsabzCxUQg8nLqCdQ2i0ic=
+modernc.org/cc/v4 v4.25.2/go.mod h1:uVtb5OGqUKpoLWhqwNQo/8LwvoiEBLvZXIQ/SmO6mL0=
+modernc.org/ccgo/v4 v4.25.1 h1:TFSzPrAGmDsdnhT9X2UrcPMI3N/mJ9/X9ykKXwLhDsU=
+modernc.org/ccgo/v4 v4.25.1/go.mod h1:njjuAYiPflywOOrm3B7kCB444ONP5pAVr8PIEoE0uDw=
+modernc.org/fileutil v1.3.0 h1:gQ5SIzK3H9kdfai/5x41oQiKValumqNTDXMvKo62HvE=
+modernc.org/fileutil v1.3.0/go.mod h1:XatxS8fZi3pS8/hKG2GH/ArUogfxjpEKs3Ku3aK4JyQ=
+modernc.org/gc/v2 v2.6.5 h1:nyqdV8q46KvTpZlsw66kWqwXRHdjIlJOhG6kxiV/9xI=
+modernc.org/gc/v2 v2.6.5/go.mod h1:YgIahr1ypgfe7chRuJi2gD7DBQiKSLMPgBQe9oIiito=
+modernc.org/libc v1.62.1 h1:s0+fv5E3FymN8eJVmnk0llBe6rOxCu/DEU+XygRbS8s=
+modernc.org/libc v1.62.1/go.mod h1:iXhATfJQLjG3NWy56a6WVU73lWOcdYVxsvwCgoPljuo=
+modernc.org/mathutil v1.7.1 h1:GCZVGXdaN8gTqB1Mf/usp1Y/hSqgI2vAGGP4jZMCxOU=
+modernc.org/mathutil v1.7.1/go.mod h1:4p5IwJITfppl0G4sUEDtCr4DthTaT47/N3aT6MhfgJg=
+modernc.org/memory v1.9.1 h1:V/Z1solwAVmMW1yttq3nDdZPJqV1rM05Ccq6KMSZ34g=
+modernc.org/memory v1.9.1/go.mod h1:/JP4VbVC+K5sU2wZi9bHoq2MAkCnrt2r98UGeSK7Mjw=
+modernc.org/opt v0.1.4 h1:2kNGMRiUjrp4LcaPuLY2PzUfqM/w9N23quVwhKt5Qm8=
+modernc.org/opt v0.1.4/go.mod h1:03fq9lsNfvkYSfxrfUhZCWPk1lm4cq4N+Bh//bEtgns=
+modernc.org/sortutil v1.2.1 h1:+xyoGf15mM3NMlPDnFqrteY07klSFxLElE2PVuWIJ7w=
+modernc.org/sortutil v1.2.1/go.mod h1:7ZI3a3REbai7gzCLcotuw9AC4VZVpYMjDzETGsSMqJE=
+modernc.org/sqlite v1.37.0 h1:s1TMe7T3Q3ovQiK2Ouz4Jwh7dw4ZDqbebSDTlSJdfjI=
+modernc.org/sqlite v1.37.0/go.mod h1:5YiWv+YviqGMuGw4V+PNplcyaJ5v+vQd7TQOgkACoJM=
+modernc.org/strutil v1.2.1 h1:UneZBkQA+DX2Rp35KcM69cSsNES9ly8mQWD71HKlOA0=
+modernc.org/strutil v1.2.1/go.mod h1:EHkiggD70koQxjVdSBM3JKM7k6L0FbGE5eymy9i3B9A=
+modernc.org/token v1.1.0 h1:Xl7Ap9dKaEs5kLoOQeQmPWevfnk/DM5qcLcYlA8ys6Y=
+modernc.org/token v1.1.0/go.mod h1:UGzOrNV1mAFSEB63lOFHIpNRUVMvYTc6yu1SMY/XTDM=
+
+--- End File: ./go.sum ---
+
+--- File: ./docs/README.md ---
+# Vjal Platform Docs
+
+--- End File: ./docs/README.md ---
+
+--- File: ./docs/sample-config.json ---
+{
+  "env": "development",
+  "httpPort": 8080,
+  "licensePath": "license.json",
+  "llmProvider": "openai",
+  "llmConfig": {
+    "apiKeyEnv": "OPENAI_API_KEY"
+  },
+  "formSchema": "forms/schema_v1.json",
+  "outputDir": "output",
+  "metricsEndpoint": "http://localhost:9091"
+}
+
+--- End File: ./docs/sample-config.json ---
+
+--- File: ./current.txt ---
+Current Application Overview
+The VjalTools Demo App is a Go‚M-^@M-^Qbased service that showcases a complete ‚M-^@M-^\schema‚M-^@M-^Qdriven form ‚M-^FM-^R prompt templating ‚M-^FM-^R LLM call ‚M-^FM-^R PDF/HTML/Markdown output‚M-^@M-^] workflow. It consists of:
+
+Client‚M-^@M-^Qside: A Tailwind¬†CSS + Alpine.js form that reads your JSON schema and lets users fill it out dynamically.
+
+Server‚M-^@M-^Qside: A Go HTTP server (cmd/process-example/main.go) that:
+
+Loads configuration & validates license
+
+Serves the form via /form-demo
+
+Processes submissions via /process
+
+Routes to either an official OpenAI client or an offline stub
+
+Renders AI responses into PDF, HTML, or Markdown
+
+Exposes Prometheus metrics and a health endpoint
+
+All core logic lives under pkg/‚M-^@¶, in modular packages:
+
+pkg/config ‚M-^@M-^S JSON/env loading with metrics
+
+pkg/license ‚M-^@M-^S license file parsing & checks
+
+pkg/storage ‚M-^@M-^S simple SQLite/file‚M-^@M-^Qbased state
+
+pkg/form ‚M-^@M-^S JSON schema ‚M-^FM-^R page rendering & validation
+
+pkg/llm ‚M-^@M-^S provider‚M-^@M-^Qbased LLM interface
+
+pkg/output ‚M-^@M-^S Markdown‚M-^FM-^RHTML + PDF (DejaVu Sans embed) renderer
+
+pkg/metrics ‚M-^@M-^S Prometheus counters/histograms
+
+Architecture
+text
+Copy
+Edit
+Browser (Alpine + Tailwind)
+ ‚M-^TM-^T‚M-^TM-^@ GET /form-demo ‚M-^TM-^@‚M-^V∂ Go Server ‚M-^TM-^@‚M-^TM-^@‚M-^T¨‚M-^TM-^@ Read JSON schema
+                                 ‚M-^TM-^\‚M-^TM-^@ Inject schema & promptKeys into HTML
+                                 ‚M-^TM-^T‚M-^TM-^@ Serve form_demo.html
+
+User fills form ‚M-^FM-^R Submit ‚M-^FM-^R JS POST /process {promptKey,data,format}
+ ‚M-^TM-^T‚M-^TM-^@ Go Server:
+     ‚M-^@¢ Lookup promptTemplates[promptKey]
+     ‚M-^@¢ Merge data via text/template
+     ‚M-^@¢ ai.Prompt(ctx, mergedPrompt) ‚M-^FM-^R string
+     ‚M-^@¢ switch format:
+         ‚M-^@M-^S md  ‚M-^FM-^R text/markdown
+         ‚M-^@M-^S html‚M-^FM-^R Markdown‚M-^FM-^RHTML
+         ‚M-^@M-^S pdf ‚M-^FM-^R Markdown‚M-^FM-^RDejaVu PDF
+     ‚M-^@¢ Return response (blob / text)
+
+Metrics: every step increments Prometheus metrics  
+Health: GET /healthz ‚M-^FM-^R ‚M-^@M-^\OK‚M-^@M-^]  
+Metrics UI: GET /metrics ‚M-^FM-^R Prometheus scrape
+Key Design Choices
+
+Component	Choice	Rationale & Pros/Cons
+Language	Go (single‚M-^@M-^Qbinary, no package distributors)	‚M-^\M-^E Fast, cross‚M-^@M-^Qcompile, small runtime; ‚M-^]M-^L GC pauses
+Form UI	JSON Schema + Alpine.js + Tailwind	‚M-^\M-^E Reactive, modern CSS, zero‚M-^@M-^Qbuild JS; ‚M-^]M-^L extra JS
+Prompt Storage	In‚M-^@M-^Qcode Go map[string]string	‚M-^\M-^E Compile‚M-^@M-^Qtime safe, IP in binary; ‚M-^]M-^L redeploy to update
+LLM Routing	pkg/llm interface + switch on cfg.LLMProvider	‚M-^\M-^E Flexible (openai vs offline vs future); ‚M-^]M-^L slight indirection
+PDF Rendering	gofpdf + embed DejaVu Sans via github.com/go-fonts/dejavu/dejavusans	‚M-^\M-^E Full UTF‚M-^@M-^Q8 (bullets, emojis); ‚M-^]M-^L +500¬†KB binary
+Metrics	Prometheus promauto histograms & counters in each pkg	‚M-^\M-^E Detailed observability
+Packaging	Single demo-process binary; Tailwind + Alpine served via CDN	‚M-^\M-^E Easy local/demo; ‚M-^]M-^L relies on external CDN network
+Implementation Status
+‚M-^\M-^E Config, License, Storage, Form, Output, Metrics packages: all have passing go test
+
+‚M-^\M-^E Embedded DejaVu Sans (full UTF‚M-^@M-^Q8 PDF)
+
+‚M-^\M-^E Official OpenAI Go SDK integration via openai-go v2+
+
+‚M-^\M-^E Offline stub available for llmProvider: "offline"
+
+‚M-^\M-^E Demo endpoints:
+
+/form-demo (interactive form)
+
+/process (JSON ‚M-^FM-^R LLM ‚M-^FM-^R PDF/HTML/MD)
+
+/metrics, /healthz
+
+‚M-^\M-^E CI script (test_all.sh) runs all pkg tests and builds binaries
+
+‚M-^\M-^E Fly.io Docker deployment tested (with CGO/SQlite caveats resolved)
+
+Error History & Resolutions
+
+Error	Cause & Fix
+Struct‚M-^@M-^Qtag parse errors	Used + "json:"‚M-^@¶" + instead of raw back‚M-^@M-^Qticks. Fixed by rewriting struct as `json:"‚M-^@¶"`
+Missing imports (context, embed)	Added import "context" in pkg/llm/llm.go; added import "embed" in pkg/output/renderer.go
+PDF bullets ‚M-^FM-^R ‚M-^@M-^\√¢‚M-^B¨¬¢‚M-^@M-^]	Default WinAnsi font lacked ‚M-^@M-^\‚M-^@¢‚M-^@M-^] ‚M-^FM-^R embedded DejaVu¬†Sans via go-fonts/dejavu/dejavusans
+Offline demo blank PDF	Stub LLM returned placeholder ‚M-^FM-^R integrated official OpenAI SDK (or offline stub) for real responses
+openai-go API mismatch	User code used sashabaranov/go-openai patterns against openai/openai-go v2 API. Rewrote Prompt() using client.Chat.Completions.New(...)
+Prometheus handler import	Replaced prometheus.Handler() with promhttp.Handler() and added missing import
+Fly.io CGO-disabled SQlite	Switched to pure‚M-^@M-^QGo storage or enabled CGO for sqlite3 on build
+Next Steps
+UI Polish
+
+Add validation feedback, mobile‚M-^@M-^Pfriendly layouts, multi‚M-^@M-^Qpage flows
+
+Use Alpine to fetch LLM‚M-^@M-^Qdriven follow‚M-^@M-^Qup questions in real‚M-^@M-^Qtime
+
+Prompt Management
+
+Consider loading templates from encrypted JSON or DB
+
+Error UX
+
+Replace alert() with a nicer toast/popup component
+
+Offline Mode
+
+Integrate Gemma¬†27B or other local LLM via CGO or WASM
+
+Packaging & Release
+
+Build Docker image, publish to container registry
+
+Automate Fly.io deploy in CI
+
+Testing & QA
+
+E2E tests: spin up server, POST sample JSON, verify PDF header %PDF-1.3
+
+Load tests on form + LLM calls
+
+--- End File: ./current.txt ---
+
+--- File: ./single.txt ---
+[Content SKIPPED (filename 'single.txt' matches exclude pattern: single.txt)]
+--- End File: ./single.txt ---
+
+--- File: ./build.sh ---
+set -euo pipefail
+
+APP_NAME=vjal-app
+IMAGE_TAG=adi-ber/vjal-platform:latest
+BUILD_DIR=build
+ZIP_NAME=vjal-platform-offline.zip
+
+# Clean previous
+rm -rf "\${BUILD_DIR}"
+mkdir -p "\${BUILD_DIR}/offline" "\${BUILD_DIR}/bin"
+
+# Build Docker image
+docker build -t "\${IMAGE_TAG}" .
+
+# Create a container and copy out the compressed binary
+CID=$(docker create "\${IMAGE_TAG}")
+docker cp "\${CID}:/\${APP_NAME}" "\${BUILD_DIR}/bin/\${APP_NAME}"
+docker rm "\${CID}"
+
+# Copy runtime assets into the offline folder
+cp config.json license.json "\${BUILD_DIR}/offline/"
+mkdir -p "\${BUILD_DIR}/offline/forms" "\${BUILD_DIR}/offline/docs"
+cp -r forms docs "\${BUILD_DIR}/offline/"
+
+# Move binary into offline folder
+cp "\${BUILD_DIR}/bin/\${APP_NAME}" "\${BUILD_DIR}/offline/"
+
+# Zip it up
+(cd "\${BUILD_DIR}/offline" && zip -r "../\${ZIP_NAME}" .)
+
+echo "Offline package is ready at \${BUILD_DIR}/\${ZIP_NAME}"
+
+--- End File: ./build.sh ---
+
+--- File: ./test_all.sh ---
+#!/usr/bin/env bash
+set -euo pipefail
+
+PKGS=(
+  "./pkg/config"
+  "./pkg/license"
+  "./pkg/storage"
+  "./pkg/llm"
+  "./pkg/form"
+  "./pkg/output"
+)
+
+echo "=== Running all package tests ==="
+for pkg in "${PKGS[@]}"; do
+  echo
+  echo ">> Testing ${pkg}"
+  go test -timeout 30s "${pkg}"
+done
+
+echo
+echo "‚M-^\M-^E All tests passed!"
+
+--- End File: ./test_all.sh ---
+
+--- File: ./scripts/embed-font.sh ---
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 1) Copy the font into your package
+mkdir -p pkg/output/fonts
+cp assets/fonts/DejaVuSans.ttf pkg/output/fonts/DejaVuSans.ttf
+
+# 2) Patch pkg/output/renderer.go
+patch -p1 << 'EOF'
+*** Begin Patch
+*** Update File: pkg/output/renderer.go
+@@
+-import (
++import (
++   "embed"
+    "bytes"
+    "fmt"
+
+    "github.com/adi-ber/vjal-platform/pkg/metrics"
+@@
+ // Renderer handles converting Markdown to various formats.
+ type Renderer struct {
+@@
+ // NewRenderer creates a new Renderer.
+@@
+ // ToPDF converts a Markdown string into a simple PDF.
+ // It writes the raw markdown as text into the PDF.
+ func (r *Renderer) ToPDF(input string) ([]byte, error) {
+     metrics.OutputPDFTotal.Inc()
+
+-    pdf := gofpdf.New("P", "mm", "A4", "")
+-    pdf.AddPage()
+-    pdf.SetFont("Arial", "", 12)
++    // embed DejaVuSans for full UTF-8
++    //go:embed fonts/DejaVuSans.ttf
++    var dejavuTTF []byte
++    pdf := gofpdf.New("P", "mm", "A4", "")
++    pdf.AddUTF8FontFromBytes("dejavu", "", dejavuTTF)
++    pdf.SetFont("dejavu", "", 12)
++    pdf.AddPage()
+
+     // Write the markdown text into the PDF
+     pdf.MultiCell(0, 6, input, "", "", false)
+
+     var buf bytes.Buffer
+*** End Patch
+EOF
+
+# 3) Rebuild your demo binary
+go build -o demo-embed cmd/process-example/main.go
+
+echo "‚M-^\M-^E Embedded DejaVuSans and updated PDF renderer."
+echo "Now run: export VJAL_HTTP_PORT=9090 && ./demo-embed"
+
+--- End File: ./scripts/embed-font.sh ---
+
+--- File: ./.github/workflows/ci.yml ---
+
+
+--- End File: ./.github/workflows/ci.yml ---
+
+--- File: ./prompts.enc ---
+{
+  "accountingClassifier": "You are a financial classifier.\nDescription: {{.description}}\nAmount: {{.amount}}\nAnswer:",
+  "userSummary":         "Form submission summary:\nName: {{.name}}\nAge: {{.age}}\nAnswer:"
+}
+
+--- End File: ./prompts.enc ---
+
+--- File: ./fly.toml ---
+# fly.toml app configuration file generated for vjal-platform on 2025-04-19T19:29:42-04:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'vjal-platform'
+primary_region = 'ord'
+
+[build]
+  dockerfile = './Dockerfile'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+--- End File: ./fly.toml ---
+
+--- File: ./license.json ---
+{
+  "license_key": "DUMMY-KEY",
+  "expires": "2099-12-31T23:59:59Z",
+  "features": ["offline_llm","cv_analysis"]
+}
+
+--- End File: ./license.json ---
+
+--- File: ./templates/tailwind_alpine_form.html ---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <!-- Tailwind CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3/dist/tailwind.min.css" rel="stylesheet"/>
+  <!-- Alpine.js -->
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js" defer></script>
+  <title>Alpine + Tailwind Form</title>
+</head>
+<body class="bg-gray-100 p-4">
+  <div x-data="formData()" class="max-w-xl mx-auto bg-white p-6 rounded shadow">
+    <h1 class="text-2xl font-bold mb-4">Dynamic Demo Form</h1>
+
+    <form @submit.prevent="handleSubmit" class="space-y-4">
+      <!-- Name -->
+      <div>
+        <label class="block font-medium mb-1" for="name">Your Name</label>
+        <input x-model="values.name" id="name" name="name" type="text"
+               class="w-full border rounded px-3 py-2" required />
+      </div>
+
+      <!-- Age -->
+      <div>
+        <label class="block font-medium mb-1" for="age">Your Age</label>
+        <input x-model.number="values.age" id="age" name="age" type="number"
+               class="w-full border rounded px-3 py-2" required />
+      </div>
+
+      <!-- Conditional: only show if age ‚M-^I•18 -->
+      <div x-show="values.age >= 18" class="transition-all">
+        <label class="block font-medium mb-1">Driver‚M-^@M-^Ys License?</label>
+        <select x-model="values.hasLicense" name="hasLicense"
+                class="w-full border rounded px-3 py-2">
+          <option value="">Select‚M-^@¶</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+      </div>
+
+      <!-- Stub for extra LLM-driven questions -->
+      <template x-for="q in extraQuestions" :key="q.id">
+        <div>
+          <label class="block font-medium mb-1" :for="q.id" x-text="q.label"></label>
+          <input :id="q.id" :name="q.id" type="text"
+                 x-model="values[q.id]"
+                 class="w-full border rounded px-3 py-2" />
+        </div>
+      </template>
+
+      <div>
+        <button type="submit"
+                class="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">
+          Submit Form & Download PDF
+        </button>
+      </div>
+    </form>
+
+    <!-- JSON dump of form data -->
+    <pre class="mt-6 bg-gray-50 p-3 rounded text-sm"><code x-text="JSON.stringify(values, null, 2)"></code></pre>
+  </div>
+
+  <script>
+    function formData() {
+      return {
+        values: { name: '', age: null, hasLicense: '', },
+        extraQuestions: [],
+        // Stub for fetching extra questions via LLM
+        fetchNewQuestions() {
+          fetch('/process', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+              promptKey: 'accountingClassifier',
+              data: this.values
+            }),
+          })
+          .then(r => r.blob())
+          .then(blob => {
+            // handle blob or parse JSON if endpoint returns questions
+          });
+        },
+        handleSubmit() {
+          fetch('/process', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+              promptKey: 'accountingClassifier',
+              data: this.values
+            }),
+          })
+          .then(r => r.blob())
+          .then(blob => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'result.pdf';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+          });
+        }
+      }
+    }
+  </script>
+</body>
+</html>
+
+--- End File: ./templates/tailwind_alpine_form.html ---
+
+--- File: ./config.json.bak ---
+[Content SKIPPED (filename 'config.json.bak' matches exclude pattern: *.bak)]
+--- End File: ./config.json.bak ---
+
+--- File: ./definitions/accountingClassifier.json ---
+{
+  "accountingClassifier": [
+    {
+      "id": "description",
+      "label": "Description",
+      "type": "text",
+      "validations": { "required": true }
+    },
+    {
+      "id": "amount",
+      "label": "Amount",
+      "type": "number",
+      "validations": { "min": 0.01 }
+    }
+  ]
+}
+
+--- End File: ./definitions/accountingClassifier.json ---
+
+--- File: ./definitions/completenessProcess.json ---
+{
+  "completenessProcess": {
+    "initialQuestion": {
+      "id": "description",
+      "label": "Describe your process end‚M-^@M-^Qto‚M-^@M-^Qend",
+      "type": "textarea",
+      "validations": { "required": true, "minLength": 50 }
+    },
+    "completenessCheck": {
+      "llmPromptTemplate": "You are an expert reviewer. Given the history of answers:\\n\\n{{.History}}\\n\\nList any missing questions as a JSON array of objects {\"id\":\"<field_id>\",\"label\":\"<question_text>\",\"type\":\"<input_type>\"}.  If complete, return an empty array.",
+      "maxRounds": 3
+    }
+  }
+}
+
+--- End File: ./definitions/completenessProcess.json ---
+
+--- File: ./definitions/userSummary.json ---
+{
+  "userSummary": [
+    {
+      "id": "name",
+      "label": "Name",
+      "type": "text",
+      "validations": { "required": true }
+    },
+    {
+      "id": "age",
+      "label": "Age",
+      "type": "number",
+      "validations": { "min": 0 }
+    }
+  ]
+}
+
+--- End File: ./definitions/userSummary.json ---
+
+--- File: ./definitions/complexProcess.json ---
+{
+  "complexProcess": [
+    { "id":"description", "label":"Describe your process", "type":"textarea", "maxRounds":5 }
+  ]
+}
+
+--- End File: ./definitions/complexProcess.json ---
+
+--- File: ./assets/.DS_Store ---
+[Content SKIPPED (filename '.DS_Store' matches exclude pattern: *.DS_Store)]
+--- End File: ./assets/.DS_Store ---
+
+--- File: ./assets/fonts/DejaVuSans.ttf ---
+[Content SKIPPED (filename 'DejaVuSans.ttf' matches exclude pattern: *.ttf)]
+--- End File: ./assets/fonts/DejaVuSans.ttf ---
+
+--- File: ./demo-process ---
+[Content SKIPPED (size 31459330 bytes > 10MB limit)]
+--- End File: ./demo-process ---
+
+--- File: ./demo-embed ---
+[Content SKIPPED (size 23425234 bytes > 10MB limit)]
+--- End File: ./demo-embed ---
+
+--- File: ./pkg/metrics/metrics.go ---
+// pkg/metrics/metrics.go
+package metrics
+
+import (
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+var (
+	// License
+	LicenseValidationTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "vjal", Subsystem: "license", Name: "validation_total",
+		Help:      "Total license validation attempts",
+	})
+	LicenseValidationErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "vjal", Subsystem: "license", Name: "validation_errors_total",
+		Help:      "Total number of license validation failures",
+	})
+
+	// Config
+	ConfigLoadDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "vjal", Subsystem: "config", Name: "load_duration_seconds",
+		Help:    "Duration of config loading",
+		Buckets: prometheus.DefBuckets,
+	})
+	ConfigLoadErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "vjal", Subsystem: "config", Name: "load_errors_total",
+		Help:      "Number of config load errors",
+	})
+
+	// Form
+	FormRenderTotal    = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "vjal", Subsystem: "form", Name: "render_total",
+		Help:      "Total number of form render calls",
+	})
+	FormRenderDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "vjal", Subsystem: "form", Name: "render_duration_seconds",
+		Help:    "Duration of form render calls",
+		Buckets: prometheus.DefBuckets,
+	})
+	FormValidationTotal    = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "vjal", Subsystem: "form", Name: "validation_total",
+		Help:      "Total number of form validation calls",
+	})
+	FormValidationWarnings = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "vjal", Subsystem: "form", Name: "validation_warnings_total",
+		Help:      "Total number of validation warnings issued",
+	})
+
+	// Storage
+	StateSaveTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "vjal", Subsystem: "storage", Name: "state_save_total",
+		Help:      "Total number of state save calls",
+	})
+	StateLoadTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "vjal", Subsystem: "storage", Name: "state_load_total",
+		Help:      "Total number of state load calls",
+	})
+
+	// LLM (with provider label)
+	LLMRequestsTotal   = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "vjal", Subsystem: "llm", Name: "requests_total",
+		Help:      "Total number of LLM requests",
+	}, []string{"provider"})
+	LLMRequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "vjal", Subsystem: "llm", Name: "request_duration_seconds",
+		Help:    "Duration of LLM requests",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"provider"})
+	LLMErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "vjal", Subsystem: "llm", Name: "errors_total",
+		Help:      "Number of LLM errors",
+	}, []string{"provider"})
+
+	// Output
+	OutputHTMLDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "vjal", Subsystem: "output", Name: "html_duration_seconds",
+		Help:    "Duration of Markdown‚M-^FM-^RHTML conversion",
+		Buckets: prometheus.DefBuckets,
+	})
+	OutputPDFDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "vjal", Subsystem: "output", Name: "pdf_duration_seconds",
+		Help:    "Duration of PDF generation",
+		Buckets: prometheus.DefBuckets,
+	})
+	OutputPDFTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "vjal", Subsystem: "output", Name: "pdf_total",
+		Help:      "Total PDF generation attempts",
+	})
+	OutputPDFErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "vjal", Subsystem: "output", Name: "pdf_errors_total",
+		Help:      "Total PDF generation failures",
+	})
+)
+
+--- End File: ./pkg/metrics/metrics.go ---
+
+--- File: ./pkg/form/definitions.go ---
+package form
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+)
+
+// PromptField describes one input in your form.
+type PromptField struct {
+	ID            string         `json:"id"`                      // lowercase field name
+	Label         string         `json:"label"`                   // human‚M-^@M-^Qreadable label
+	Type          string         `json:"type"`                    // html input type (text, number, etc.)
+	Validations   *Validations   `json:"validations,omitempty"`   // optional validation rules
+	Condition     *Condition     `json:"condition,omitempty"`     // optional display condition
+	LLMValidation *LLMValidation `json:"llmValidation,omitempty"` // optional LLM‚M-^@M-^Qbased check
+	Options       []string       `json:"options,omitempty"`       // for selects/radios
+	Placeholder   string         `json:"placeholder,omitempty"`   // optional placeholder text
+}
+
+// Validations holds basic client/server rules.
+type Validations struct {
+	Required  bool    `json:"required,omitempty"`
+	MinLength int     `json:"minLength,omitempty"`
+	MaxLength int     `json:"maxLength,omitempty"`
+	Min       float64 `json:"min,omitempty"`
+	Max       float64 `json:"max,omitempty"`
+	Pattern   string  `json:"pattern,omitempty"`
+}
+
+// Condition controls whether to show a field.
+type Condition struct {
+	FieldID string      `json:"fieldId"`
+	Value   interface{} `json:"value"`
+}
+
+// LLMValidation flags a field for AI checks.
+type LLMValidation struct {
+	Enabled bool   `json:"enabled"`
+	Type    string `json:"type"`
+	Trigger string `json:"trigger"`
+}
+
+// FormDefinitions maps promptKey ‚M-^FM-^R slice of PromptField.
+type FormDefinitions map[string][]PromptField
+
+// LoadDefinitionsDir reads every .json file in dir, merges into one FormDefinitions.
+// Invalid JSON or duplicate keys are logged and skipped.
+func LoadDefinitionsDir(dir string) (FormDefinitions, error) {
+	defs := make(FormDefinitions)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("reading definitions dir: %w", err)
+	}
+
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		b, err := os.ReadFile(path)
+		if err != nil {
+			log.Printf("‚M-^Z†Ô∏M-^O  could not read %s: %v", path, err)
+			continue
+		}
+
+		var tmp FormDefinitions
+		if err := json.Unmarshal(b, &tmp); err != nil {
+			log.Printf("‚M-^Z†Ô∏M-^O  invalid JSON in %s: %v", path, err)
+			continue
+		}
+
+		for key, fields := range tmp {
+			if _, exists := defs[key]; exists {
+				log.Printf("‚M-^Z†Ô∏M-^O  duplicate form key %q in %s ‚M-^@M-^S skipping", key, path)
+				continue
+			}
+			defs[key] = fields
+		}
+	}
+
+	if len(defs) == 0 {
+		return nil, fmt.Errorf("no valid form definitions found in %s", dir)
+	}
+	return defs, nil
+}
+
+--- End File: ./pkg/form/definitions.go ---
+
+--- File: ./pkg/form/engine_test.go ---
+// pkg/form/engine_test.go
+package form
+
+import (
+	"context"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+
+	"github.com/adi-ber/vjal-platform/pkg/storage"
+)
+
+// writeTempSchema creates a temp JSON schema file for tests.
+func writeTempSchema(t *testing.T, content string) string {
+	t.Helper()
+	f, err := ioutil.TempFile("", "schema-*.json")
+	if err != nil {
+		t.Fatalf("failed to create temp schema file: %v", err)
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		t.Fatalf("failed to write schema file: %v", err)
+	}
+	f.Close()
+	return f.Name()
+}
+
+func TestSaveLoadState(t *testing.T) {
+	// Prepare a temp DB
+	tmpDir, err := ioutil.TempDir("", "formstate")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "state.db")
+	store, err := storage.New(dbPath)
+	if err != nil {
+		t.Fatalf("storage.New error: %v", err)
+	}
+
+	// Create a minimal form schema file
+	schema := `{"pages":[{"id":"start","fields":[]}]}`
+	schemaPath := writeTempSchema(t, schema)
+	defer os.Remove(schemaPath)
+
+	// Instantiate the Form with storage
+	formID := "testForm"
+	f, err := New(schemaPath, store, formID)
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	pageID := "start"
+	input := map[string]interface{}{"field": "value", "num": 5.0}
+
+	// Save
+	if err := f.SaveState(context.Background(), pageID, input); err != nil {
+		t.Fatalf("SaveState error: %v", err)
+	}
+
+	// Load and compare
+	loaded, err := f.LoadState(context.Background(), pageID)
+	if err != nil {
+		t.Fatalf("LoadState error: %v", err)
+	}
+	if !reflect.DeepEqual(loaded, input) {
+		t.Errorf("Loaded %v, want %v", loaded, input)
+	}
+}
+
+--- End File: ./pkg/form/engine_test.go ---
+
+--- File: ./pkg/form/engine.go ---
+// pkg/form/engine.go
+package form
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+
+	"github.com/adi-ber/vjal-platform/pkg/storage"
+	"github.com/adi-ber/vjal-platform/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+// Form represents a multi-page form with persisted state.
+type Form struct {
+	Schema map[string]interface{} // raw JSON schema
+	Values map[string]interface{} // in-memory merged values
+	store  *storage.Store         // storage backend for state
+	formID string                 // namespace for persisted state
+}
+
+// New loads the form schema, attaches storage under formID, and registers metrics.
+func New(schemaPath string, store *storage.Store, formID string) (*Form, error) {
+	data, err := ioutil.ReadFile(schemaPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read form schema %s: %w", schemaPath, err)
+	}
+	var schema map[string]interface{}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		return nil, fmt.Errorf("invalid JSON in form schema: %w", err)
+	}
+	return &Form{
+		Schema: schema,
+		Values: make(map[string]interface{}),
+		store:  store,
+		formID: formID,
+	}, nil
+}
+
+// RenderPage returns placeholder HTML for the given pageID, with metrics.
+func (f *Form) RenderPage(ctx context.Context, pageID string) (string, error) {
+	metrics.FormRenderTotal.Inc()
+	timer := prometheus.NewTimer(metrics.FormRenderDuration)
+	defer timer.ObserveDuration()
+
+	// Stub implementation: real implementation will generate HTML from schema
+	return fmt.Sprintf("<div>Rendering page: %s</div>", pageID), nil
+}
+
+// Validate merges input into Values, records warnings, and updates metrics.
+func (f *Form) Validate(ctx context.Context, pageID string, input map[string]interface{}) ([]string, error) {
+	metrics.FormValidationTotal.Inc()
+	// Stub: merge input to Values
+	for k, v := range input {
+		f.Values[k] = v
+	}
+
+	// No actual warnings in stub
+	warnings := []string{}
+	metrics.FormValidationWarnings.Add(float64(len(warnings)))
+
+	return warnings, nil
+}
+
+// NextPage stub‚M-^@M-^Talways returns "end".
+func (f *Form) NextPage(currentPageID string) (string, error) {
+	return "end", nil
+}
+
+// SaveState persists the input map for the given pageID and updates metrics.
+func (f *Form) SaveState(ctx context.Context, pageID string, input map[string]interface{}) error {
+	if err := f.store.Save(f.formID, pageID, input); err != nil {
+		return fmt.Errorf("failed to save state: %w", err)
+	}
+	return nil
+}
+
+// LoadState retrieves the persisted input map for pageID and updates metrics.
+func (f *Form) LoadState(ctx context.Context, pageID string) (map[string]interface{}, error) {
+	data := make(map[string]interface{})
+	if err := f.store.Load(f.formID, pageID, &data); err != nil {
+		return nil, fmt.Errorf("failed to load state: %w", err)
+	}
+	// Merge into in-memory Values
+	for k, v := range data {
+		f.Values[k] = v
+	}
+	return data, nil
+}
+
+--- End File: ./pkg/form/engine.go ---
+
+--- File: ./pkg/llm/llm.go ---
+// pkg/llm/llm.go
+package llm
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/adi-ber/vjal-platform/pkg/config"
+	"github.com/adi-ber/vjal-platform/pkg/license"
+	"github.com/adi-ber/vjal-platform/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+// Client is the interface for our LLM backends.
+type Client interface {
+	// Prompt sends a text prompt and returns the model's reply.
+	Prompt(ctx context.Context, prompt string) (string, error)
+	// HealthCheck verifies that the backend is reachable/ready.
+	HealthCheck(ctx context.Context) error
+}
+
+// New selects and instantiates the proper Client, then wraps it for metrics.
+func New(cfg *config.AppConfig, lic *license.License) (Client, error) {
+	var base Client
+	var err error
+
+	switch cfg.LLMProvider {
+	case "openai":
+		base = NewOpenAIClient(cfg.LLMConfig["openai_key"])
+	case "offline":
+		base, err = NewOfflineClient(cfg.LLMConfig)
+		if err != nil {
+			return nil, err
+		}
+	case "echo":
+		base = &echoClient{}
+	default:
+		return nil, fmt.Errorf("unknown LLM provider: %q", cfg.LLMProvider)
+	}
+
+	// Wrap in metrics collector
+	return &metricsClient{
+		provider: cfg.LLMProvider,
+		next:     base,
+	}, nil
+}
+
+// --------------------
+// metricsClient decorates any Client to capture Prometheus metrics.
+// --------------------
+type metricsClient struct {
+	provider string
+	next     Client
+}
+
+func (m *metricsClient) Prompt(ctx context.Context, prompt string) (string, error) {
+	// increment request count
+	metrics.LLMRequestsTotal.WithLabelValues(m.provider).Inc()
+	// time the request
+	timer := prometheus.NewTimer(metrics.LLMRequestDuration.WithLabelValues(m.provider))
+	defer timer.ObserveDuration()
+
+	resp, err := m.next.Prompt(ctx, prompt)
+	if err != nil {
+		metrics.LLMErrorsTotal.WithLabelValues(m.provider).Inc()
+	}
+	return resp, err
+}
+
+func (m *metricsClient) HealthCheck(ctx context.Context) error {
+	return m.next.HealthCheck(ctx)
+}
+
+// --------------------
+// echoClient simply echoes back the prompt.
+// --------------------
+type echoClient struct{}
+
+func (e *echoClient) Prompt(ctx context.Context, prompt string) (string, error) {
+	return prompt, nil
+}
+
+func (e *echoClient) HealthCheck(ctx context.Context) error {
+	return nil
+}
+
+--- End File: ./pkg/llm/llm.go ---
+
+--- File: ./pkg/llm/llm_test.go ---
+package llm
+
+import (
+	"context"
+	"testing"
+
+	"github.com/adi-ber/vjal-platform/pkg/config"
+	"github.com/adi-ber/vjal-platform/pkg/license"
+)
+
+func TestEchoProvider_PromptAndHealth(t *testing.T) {
+	// Prepare dummy config and license
+	cfg := config.AppConfig{LLMProvider: "echo"}
+	lic := &license.License{}
+
+	// Instantiate using a pointer to config.AppConfig
+	provider, err := New(&cfg, lic)
+	if err != nil {
+		t.Fatalf("expected no error getting echo provider, got %v", err)
+	}
+
+	// Test Prompt
+	input := "hello"
+	out, err := provider.Prompt(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Prompt error: %v", err)
+	}
+	if out != input {
+		t.Errorf("expected echo %q, got %q", input, out)
+	}
+
+	// Test HealthCheck
+	if err := provider.HealthCheck(context.Background()); err != nil {
+		t.Errorf("expected no healthcheck error, got %v", err)
+	}
+}
+
+func TestUnknownProvider(t *testing.T) {
+	cfg := config.AppConfig{LLMProvider: "no-such"}
+	lic := &license.License{}
+
+	// Use pointer to cfg
+	_, err := New(&cfg, lic)
+	if err == nil {
+		t.Fatal("expected error for unknown provider, got nil")
+	}
+}
+
+func TestMetricsLabels(t *testing.T) {
+	// provider labels shouldn't affect compilation; just ensure New accepts pointer
+	cfg := config.AppConfig{LLMProvider: "echo"}
+	lic := &license.License{}
+
+	_, err := New(&cfg, lic)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+--- End File: ./pkg/llm/llm_test.go ---
+
+--- File: ./pkg/llm/offline_client.go ---
+package llm
+
+import "context"
+
+// OfflineClient is a stub for an embedded/offline model.
+type OfflineClient struct{}
+
+// NewOfflineClient constructs an OfflineClient.
+func NewOfflineClient(cfg map[string]string) (Client, error) {
+	return &OfflineClient{}, nil
+}
+
+// Prompt returns a simple stub response.
+func (o *OfflineClient) Prompt(ctx context.Context, prompt string) (string, error) {
+	return "Offline response to: " + prompt, nil
+}
+
+// HealthCheck for OfflineClient is always healthy.
+func (o *OfflineClient) HealthCheck(ctx context.Context) error {
+	return nil
+}
+
+--- End File: ./pkg/llm/offline_client.go ---
+
+--- File: ./pkg/llm/openai_client.go ---
+package llm
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	openai "github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/shared"
+)
+
+// OpenAIClient wraps the official OpenAI Go SDK.
+type OpenAIClient struct {
+	client *openai.Client
+}
+
+// NewOpenAIClient constructs an OpenAIClient.
+// If apiKey is empty, it reads from the OPENAI_API_KEY env var.
+func NewOpenAIClient(apiKey string) Client {
+	key := apiKey
+	if key == "" {
+		key = os.Getenv("OPENAI_API_KEY")
+	}
+	cli := openai.NewClient(option.WithAPIKey(key))
+	return &OpenAIClient{client: &cli}
+}
+
+// Prompt sends your prompt to OpenAI and returns the assistant's reply.
+func (o *OpenAIClient) Prompt(ctx context.Context, prompt string) (string, error) {
+	params := openai.ChatCompletionNewParams{
+		Model: shared.ChatModelGPT4o,
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.UserMessage(prompt),
+		},
+	}
+	resp, err := o.client.Chat.Completions.New(ctx, params)
+	if err != nil {
+		return "", fmt.Errorf("OpenAI error: %w", err)
+	}
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("OpenAI returned no choices")
+	}
+	return resp.Choices[0].Message.Content, nil
+}
+
+// HealthCheck for OpenAIClient is a no‚M-^@M-^Qop (always healthy).
+func (o *OpenAIClient) HealthCheck(ctx context.Context) error {
+	return nil
+}
+
+--- End File: ./pkg/llm/openai_client.go ---
+
+--- File: ./pkg/.DS_Store ---
+[Content SKIPPED (filename '.DS_Store' matches exclude pattern: *.DS_Store)]
+--- End File: ./pkg/.DS_Store ---
+
+--- File: ./pkg/license/validator.go ---
+// pkg/license/validator.go
+package license
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"time"
+
+	"github.com/adi-ber/vjal-platform/pkg/config"
+	"github.com/adi-ber/vjal-platform/pkg/metrics"
+)
+
+// License represents a customer's license file structure.
+type License struct {
+	Key      string    `json:"license_key"`      // matches JSON field in your license.json
+	Expires  time.Time `json:"expires"`          // RFC3339 timestamp
+	Features []string  `json:"features"`         // list of enabled features
+	DeviceID string    `json:"deviceID,omitempty"` // optional device fingerprint
+}
+
+// Validator handles license validation and feature checks.
+type Validator struct {
+	cfg *config.AppConfig
+}
+
+// NewValidator creates a license Validator using the application config.
+func NewValidator(cfg *config.AppConfig) *Validator {
+	return &Validator{cfg: cfg}
+}
+
+// Validate reads, parses, and checks the license file. It records
+// total attempts and errors in Prometheus, and returns the License.
+func (v *Validator) Validate(ctx context.Context) (*License, error) {
+	metrics.LicenseValidationTotal.Inc()
+
+	// Read the file
+	data, err := ioutil.ReadFile(v.cfg.LicensePath)
+	if err != nil {
+		metrics.LicenseValidationErrors.Inc()
+		return nil, fmt.Errorf("failed to read license file %s: %w", v.cfg.LicensePath, err)
+	}
+
+	// Parse JSON
+	var lic License
+	if err := json.Unmarshal(data, &lic); err != nil {
+		metrics.LicenseValidationErrors.Inc()
+		return nil, fmt.Errorf("invalid JSON in license file: %w", err)
+	}
+
+	// Check expiry
+	if time.Now().After(lic.Expires) {
+		metrics.LicenseValidationErrors.Inc()
+		return &lic, fmt.Errorf("license expired on %s", lic.Expires.Format(time.RFC3339))
+	}
+
+	return &lic, nil
+}
+
+// CheckFeature returns true if the given feature is present in the license.
+// It re-reads the license file for simplicity; a real implementation might cache.
+func (v *Validator) CheckFeature(feature string) bool {
+	data, err := ioutil.ReadFile(v.cfg.LicensePath)
+	if err != nil {
+		return false
+	}
+	var lic License
+	if err := json.Unmarshal(data, &lic); err != nil {
+		return false
+	}
+	for _, f := range lic.Features {
+		if f == feature {
+			return true
+		}
+	}
+	return false
+}
+
+// HealthCheck allows you to verify license validity as a readiness check.
+func (v *Validator) HealthCheck(ctx context.Context) error {
+	_, err := v.Validate(ctx)
+	return err
+}
+
+--- End File: ./pkg/license/validator.go ---
+
+--- File: ./pkg/license/validator_test.go ---
+package license
+
+import (
+	"context"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/adi-ber/vjal-platform/pkg/config"
+)
+
+func writeTempLicenseFile(t *testing.T, content string) string {
+	t.Helper()
+	f, err := ioutil.TempFile("", "license-*.json")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	f.Close()
+	return f.Name()
+}
+
+func TestValidate_Valid(t *testing.T) {
+	expires := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
+	jsonData := fmt.Sprintf(
+		`{"license_key":"TEST","expires":"%s","features":["f1"]}`, expires,
+	)
+	path := writeTempLicenseFile(t, jsonData)
+	defer os.Remove(path)
+
+	cfg := config.AppConfig{LicensePath: path}
+	v := NewValidator(&cfg)
+	lic, err := v.Validate(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if lic.Key != "TEST" {
+		t.Errorf("expected key TEST, got %s", lic.Key)
+	}
+}
+
+func TestValidate_Expired(t *testing.T) {
+	expires := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
+	jsonData := fmt.Sprintf(
+		`{"license_key":"OLD","expires":"%s","features":[]}`, expires,
+	)
+	path := writeTempLicenseFile(t, jsonData)
+	defer os.Remove(path)
+
+	cfg := config.AppConfig{LicensePath: path}
+	v := NewValidator(&cfg)
+	_, err := v.Validate(context.Background())
+	if err == nil {
+		t.Fatal("expected error for expired license, got nil")
+	}
+}
+
+func TestCheckFeature(t *testing.T) {
+	jsonData := `{"license_key":"F","expires":"2099-12-31T23:59:59Z","features":["a","b"]}`
+	path := writeTempLicenseFile(t, jsonData)
+	defer os.Remove(path)
+
+	cfg := config.AppConfig{LicensePath: path}
+	v := NewValidator(&cfg)
+	if !v.CheckFeature("a") {
+		t.Error("expected feature 'a' to be present")
+	}
+	if v.CheckFeature("z") {
+		t.Error("did not expect feature 'z'")
+	}
+}
+
+func TestHealthCheck(t *testing.T) {
+	jsonData := `{"license_key":"H","expires":"2099-12-31T23:59:59Z","features":[]}`
+	path := writeTempLicenseFile(t, jsonData)
+	defer os.Remove(path)
+
+	cfg := config.AppConfig{LicensePath: path}
+	v := NewValidator(&cfg)
+	if err := v.HealthCheck(context.Background()); err != nil {
+		t.Errorf("expected HealthCheck to succeed, got %v", err)
+	}
+}
+
+--- End File: ./pkg/license/validator_test.go ---
+
+--- File: ./pkg/config/config.go ---
+// pkg/config/config.go
+package config
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+
+	"github.com/adi-ber/vjal-platform/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+// AppConfig holds application configuration loaded from JSON and environment variables.
+type AppConfig struct {
+	Env             string            `json:"env"`             // "development" or "production"
+	HTTPPort        int               `json:"httpPort"`        // port for HTTP server
+	LicensePath     string            `json:"licensePath"`     // path to license.json
+	LLMProvider     string            `json:"llmProvider"`     // "openai", "vjal", or "offline"
+	LLMConfig       map[string]string `json:"llmConfig"`       // provider-specific settings
+	FormSchema      string            `json:"formSchema"`      // path to JSON form schema
+	OutputDir       string            `json:"outputDir"`       // path to write outputs
+	MetricsEndpoint string            `json:"metricsEndpoint"` // pushgateway URL or empty
+}
+
+// Load reads the JSON config file at the given path, overrides via env vars,
+// validates required fields, and records metrics on load duration and errors.
+func Load(path string) (*AppConfig, error) {
+	// Start timer for load duration
+	timer := prometheus.NewTimer(metrics.ConfigLoadDuration)
+	defer timer.ObserveDuration()
+
+	// Resolve absolute path
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		metrics.ConfigLoadErrors.Inc()
+		return nil, fmt.Errorf("invalid config path %q: %w", path, err)
+	}
+
+	// Read file
+	data, err := ioutil.ReadFile(absPath)
+	if err != nil {
+		metrics.ConfigLoadErrors.Inc()
+		return nil, fmt.Errorf("failed to read config file %s: %w", absPath, err)
+	}
+
+	// Parse JSON
+	var cfg AppConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		metrics.ConfigLoadErrors.Inc()
+		return nil, fmt.Errorf("invalid JSON in config file: %w", err)
+	}
+
+	// Override with environment variables
+	overrideEnv(&cfg)
+
+	// Validate required fields
+	if cfg.LicensePath == "" {
+		metrics.ConfigLoadErrors.Inc()
+		return nil, errors.New("licensePath is required in config")
+	}
+	if cfg.FormSchema == "" {
+		metrics.ConfigLoadErrors.Inc()
+		return nil, errors.New("formSchema is required in config")
+	}
+	if cfg.LLMProvider == "" {
+		metrics.ConfigLoadErrors.Inc()
+		return nil, errors.New("llmProvider is required in config")
+	}
+	if cfg.HTTPPort == 0 {
+		cfg.HTTPPort = 8080 // default port
+	}
+
+	return &cfg, nil
+}
+
+// overrideEnv checks for environment variables prefixed with VJAL_ and overrides fields.
+func overrideEnv(cfg *AppConfig) {
+	if v := os.Getenv("VJAL_ENV"); v != "" {
+		cfg.Env = v
+	}
+	if v := os.Getenv("VJAL_HTTP_PORT"); v != "" {
+		fmt.Sscanf(v, "%d", &cfg.HTTPPort)
+	}
+	if v := os.Getenv("VJAL_LICENSE_PATH"); v != "" {
+		cfg.LicensePath = v
+	}
+	if v := os.Getenv("VJAL_LLM_PROVIDER"); v != "" {
+		cfg.LLMProvider = v
+	}
+	if v := os.Getenv("VJAL_FORM_SCHEMA"); v != "" {
+		cfg.FormSchema = v
+	}
+	// Add overrides for other fields as needed
+}
+
+--- End File: ./pkg/config/config.go ---
+
+--- File: ./pkg/config/config_test.go ---
+package config
+
+import (
+	"io/ioutil"
+	"os"
+	"testing"
+)
+
+func writeTempFile(t *testing.T, content string) string {
+	t.Helper()
+	f, err := ioutil.TempFile("", "config-*.json")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	f.Close()
+	return f.Name()
+}
+
+func TestLoad_ValidConfig(t *testing.T) {
+	json := `{
+		"env": "development",
+		"httpPort": 9090,
+		"licensePath": "/tmp/license.json",
+		"llmProvider": "openai",
+		"llmConfig": {"apiKey": "testkey"},
+		"formSchema": "schema.json",
+		"outputDir": "out",
+		"metricsEndpoint": "http://localhost:9091"
+	}`
+	path := writeTempFile(t, json)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if cfg.HTTPPort != 9090 {
+		t.Errorf("expected HTTPPort 9090, got %d", cfg.HTTPPort)
+	}
+	if cfg.LLMProvider != "openai" {
+		t.Errorf("expected LLMProvider openai, got %s", cfg.LLMProvider)
+	}
+}
+
+func TestLoad_MissingRequired(t *testing.T) {
+	json := `{"env": "prod"}`
+	path := writeTempFile(t, json)
+	defer os.Remove(path)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for missing required fields, got nil")
+	}
+}
+
+--- End File: ./pkg/config/config_test.go ---
+
+--- File: ./pkg/security/crypto.go ---
+// pkg/security/crypto.go
+package security
+
+import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"io/ioutil"
+
+	"golang.org/x/crypto/scrypt"
+)
+
+const (
+	saltLen = 16
+	keyLen  = 32 // 256-bit AES key
+)
+
+// deriveKey uses scrypt KDF to derive an AES key from the licenseKey, deviceID, and salt.
+func deriveKey(licenseKey string, deviceID, salt []byte) ([]byte, error) {
+	// N=1<<15, r=8, p=1 as reasonable work factor
+	return scrypt.Key([]byte(licenseKey), append(deviceID, salt...), 1<<15, 8, 1, keyLen)
+}
+
+// Encrypt encrypts plaintext using AES-GCM. Returns salt||nonce||ciphertext (no auth tag separately).
+func Encrypt(plaintext []byte, licenseKey string, deviceID []byte) ([]byte, error) {
+	// Generate random salt
+	salt := make([]byte, saltLen)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return nil, fmt.Errorf("failed to generate salt: %w", err)
+	}
+
+	// Derive key
+	key, err := deriveKey(licenseKey, deviceID, salt)
+	if err != nil {
+		return nil, fmt.Errorf("key derivation failed: %w", err)
+	}
+
+	// Create AES-GCM
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	// Generate random nonce
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	// Seal authenticates and encrypts
+	ciphertext := gcm.Seal(nil, nonce, plaintext, nil)
+
+	// Return concatenated: salt||nonce||ciphertext
+	out := make([]byte, 0, saltLen+len(nonce)+len(ciphertext))
+	out = append(out, salt...)
+	out = append(out, nonce...)
+	out = append(out, ciphertext...)
+	return out, nil
+}
+
+// Decrypt decrypts data produced by Encrypt, verifying authenticity.
+func Decrypt(data []byte, licenseKey string, deviceID []byte) ([]byte, error) {
+	if len(data) < saltLen {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	// Extract salt
+	salt := data[:saltLen]
+	// Derive key
+	key, err := deriveKey(licenseKey, deviceID, salt)
+	if err != nil {
+		return nil, fmt.Errorf("key derivation failed: %w", err)
+	}
+
+	// AES-GCM
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	nonceSize := gcm.NonceSize()
+	if len(data) < saltLen+nonceSize {
+		return nil, fmt.Errorf("ciphertext too short for nonce")
+	}
+	// Extract nonce and ciphertext
+	nonce := data[saltLen : saltLen+nonceSize]
+	ciphertext := data[saltLen+nonceSize:]
+
+	// Decrypt and authenticate
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, fmt.Errorf("decryption failed: %w", err)
+	}
+	return plaintext, nil
+}
+
+// ValidateHash checks that the SHA-256 hash of the file at path matches the expected hex string.
+func ValidateHash(path, expectedHex string) error {
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read file %s: %w", path, err)
+	}
+	actual := sha256.Sum256(data)
+	actualHex := hex.EncodeToString(actual[:])
+	if !bytes.Equal([]byte(actualHex), []byte(expectedHex)) {
+		return fmt.Errorf("hash mismatch: expected %s, got %s", expectedHex, actualHex)
+	}
+	return nil
+}
+
+--- End File: ./pkg/security/crypto.go ---
+
+--- File: ./pkg/security/crypto_test.go ---
+// pkg/security/crypto_test.go
+package security
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"io/ioutil"
+	"testing"
+)
+
+func TestEncryptDecrypt_Roundtrip(t *testing.T) {
+	plaintext := []byte("sensitive data")
+	licenseKey := "TEST-LIC"
+	deviceID := []byte("DEVICE1234")
+
+	// Encrypt
+	ciphertext, err := Encrypt(plaintext, licenseKey, deviceID)
+	if err != nil {
+		t.Fatalf("Encrypt error: %v", err)
+	}
+
+	// Decrypt
+	decrypted, err := Decrypt(ciphertext, licenseKey, deviceID)
+	if err != nil {
+		t.Fatalf("Decrypt error: %v", err)
+	}
+
+	if string(decrypted) != string(plaintext) {
+		t.Errorf("expected %s, got %s", plaintext, decrypted)
+	}
+}
+
+func TestDecrypt_TamperDetect(t *testing.T) {
+	plaintext := []byte("sensitive data")
+	licenseKey := "TEST-LIC"
+	deviceID := []byte("DEVICE1234")
+
+	ciphertext, err := Encrypt(plaintext, licenseKey, deviceID)
+	if err != nil {
+		t.Fatalf("Encrypt error: %v", err)
+	}
+
+	// Tamper last byte
+	ciphertext[len(ciphertext)-1] ^= 0xFF
+
+	_, err = Decrypt(ciphertext, licenseKey, deviceID)
+	if err == nil {
+		t.Fatal("expected decryption error after tampering, got nil")
+	}
+}
+
+func TestValidateHash_Success(t *testing.T) {
+	// Create a temp file
+	f, err := ioutil.TempFile("", "hash-*.txt")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	content := []byte("hello world")
+	ioutil.WriteFile(f.Name(), content, 0600)
+	f.Close()
+
+	// Compute expected hash
+	h := sha256.Sum256(content)
+	expected := hex.EncodeToString(h[:])
+
+	// Validate
+	err = ValidateHash(f.Name(), expected)
+	if err != nil {
+		t.Fatalf("ValidateHash failed: %v", err)
+	}
+}
+
+func TestValidateHash_Failure(t *testing.T) {
+	// Create a temp file
+	f, err := ioutil.TempFile("", "hash-*.txt")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	ioutil.WriteFile(f.Name(), []byte("data1"), 0600)
+	f.Close()
+
+	// Wrong expected hash
+	expected := "abcdef123456"
+
+	// Validate
+	err = ValidateHash(f.Name(), expected)
+	if err == nil {
+		t.Fatal("expected ValidateHash to error on mismatch, got nil")
+	}
+}
+
+--- End File: ./pkg/security/crypto_test.go ---
+
+--- File: ./pkg/output/.DS_Store ---
+[Content SKIPPED (filename '.DS_Store' matches exclude pattern: *.DS_Store)]
+--- End File: ./pkg/output/.DS_Store ---
+
+--- File: ./pkg/output/renderer_test.go ---
+package output
+
+import (
+	"bytes"
+	"testing"
+)
+
+func TestToHTML_Basic(t *testing.T) {
+	r := NewRenderer()
+	html, err := r.ToHTML("**bold**")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Contains([]byte(html), []byte("<strong>bold</strong>")) {
+		t.Errorf("expected HTML to contain <strong>bold</strong>, got %q", html)
+	}
+}
+
+func TestToPDF_ValidPDF(t *testing.T) {
+	r := NewRenderer()
+	pdf, err := r.ToPDF("Hello PDF")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Must start with PDF header
+	if !bytes.HasPrefix(pdf, []byte("%PDF")) {
+		t.Errorf("PDF should start with %%PDF, got %q...", pdf[:4])
+	}
+	// And must be non-trivially sized
+	if len(pdf) < 200 {
+		t.Errorf("PDF size too small: %d bytes", len(pdf))
+	}
+}
+
+--- End File: ./pkg/output/renderer_test.go ---
+
+--- File: ./pkg/output/renderer.go ---
+// pkg/output/renderer.go
+package output
+
+import (
+	"bytes"
+	"fmt"
+
+	"github.com/adi-ber/vjal-platform/pkg/metrics"
+	"github.com/jung-kurt/gofpdf"
+	"github.com/yuin/goldmark"
+
+	// DejaVu Sans TTF data
+	dejavusans "github.com/go-fonts/dejavu/dejavusans"
+)
+
+// dejavuTTF is the raw TTF bytes for DejaVu Sans, imported from the go-fonts package.
+var dejavuTTF = dejavusans.TTF
+
+// Renderer handles converting Markdown to various formats.
+type Renderer struct {
+	md goldmark.Markdown
+}
+
+// NewRenderer creates a new Renderer.
+func NewRenderer() *Renderer {
+	return &Renderer{
+		md: goldmark.New(),
+	}
+}
+
+// ToHTML converts Markdown to HTML.
+func (r *Renderer) ToHTML(input string) (string, error) {
+	var buf bytes.Buffer
+	if err := r.md.Convert([]byte(input), &buf); err != nil {
+		return "", fmt.Errorf("HTML conversion failed: %w", err)
+	}
+	return buf.String(), nil
+}
+
+// ToPDF converts a Markdown string into a simple PDF with full UTF-8 support.
+func (r *Renderer) ToPDF(input string) ([]byte, error) {
+	metrics.OutputPDFTotal.Inc()
+
+	// Create a new PDF, register our DejaVu¬†Sans TrueType font, then use it.
+	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf.AddUTF8FontFromBytes("dejavu", "", dejavuTTF)
+	pdf.SetFont("dejavu", "", 12)
+	pdf.AddPage()
+
+	// Write the markdown text into the PDF
+	pdf.MultiCell(0, 6, input, "", "", false)
+
+	var buf bytes.Buffer
+	if err := pdf.Output(&buf); err != nil {
+		metrics.OutputPDFErrors.Inc()
+		return nil, fmt.Errorf("PDF generation failed: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+--- End File: ./pkg/output/renderer.go ---
+
+--- File: ./pkg/output/fonts/DejaVuSans.ttf ---
+[Content SKIPPED (filename 'DejaVuSans.ttf' matches exclude pattern: *.ttf)]
+--- End File: ./pkg/output/fonts/DejaVuSans.ttf ---
+
+--- File: ./pkg/storage/storage_test.go ---
+// pkg/storage/storage_test.go
+package storage
+
+import (
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+)
+
+func TestStore_SaveLoad(t *testing.T) {
+	// Setup temp DB file
+	tmpDir, err := ioutil.TempDir("", "storagetest")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "state.db")
+	store, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	namespace := "form"
+	key := "page1"
+	// Note: JSON unmarshals numbers as float64
+	original := map[string]interface{}{
+		"name":  "Alice",
+		"score": 100.0,  // float64 literal
+	}
+
+	// Save state
+	if err := store.Save(namespace, key, original); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	// Load back
+	loaded := make(map[string]interface{})
+	if err := store.Load(namespace, key, &loaded); err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !reflect.DeepEqual(loaded, original) {
+		t.Errorf("Loaded %v, want %v", loaded, original)
+	}
+
+	// Loading non-existent key should leave the map empty
+	empty := make(map[string]interface{})
+	if err := store.Load("nope", "none", &empty); err != nil {
+		t.Fatalf("Load(nonexistent) error: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("expected empty map for nonexistent key, got %v", empty)
+	}
+}
+
+--- End File: ./pkg/storage/storage_test.go ---
+
+--- File: ./pkg/storage/storage.go ---
+// pkg/storage/storage.go
+package storage
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+
+	"github.com/adi-ber/vjal-platform/pkg/metrics"
+	_ "modernc.org/sqlite"
+)
+
+// Store provides a simple JSON-backed key/value store in SQLite.
+type Store struct {
+	db *sql.DB
+}
+
+// New opens (or creates) the SQLite file at dbPath and ensures the state table exists.
+func New(dbPath string) (*Store, error) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open sqlite db: %w", err)
+	}
+	const createStmt = `
+CREATE TABLE IF NOT EXISTS state (
+  namespace TEXT NOT NULL,
+  item_key  TEXT NOT NULL,
+  data      TEXT NOT NULL,
+  PRIMARY KEY (namespace, item_key)
+);`
+	if _, err := db.Exec(createStmt); err != nil {
+		return nil, fmt.Errorf("failed to create state table: %w", err)
+	}
+	return &Store{db: db}, nil
+}
+
+// Save stores the JSON-serialized value under (namespace, key).
+// On conflict it overwrites the existing data.
+func (s *Store) Save(namespace, key string, value interface{}) error {
+	metrics.StateSaveTotal.Inc()
+
+	bytesData, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("failed to marshal value: %w", err)
+	}
+	const stmt = `
+INSERT INTO state (namespace, item_key, data)
+VALUES (?, ?, ?)
+ON CONFLICT(namespace, item_key) DO UPDATE SET data=excluded.data;`
+	if _, err := s.db.Exec(stmt, namespace, key, string(bytesData)); err != nil {
+		return fmt.Errorf("failed to save state: %w", err)
+	}
+	return nil
+}
+
+// Load retrieves the JSON data for (namespace, key) and unmarshals it into dest.
+// If no row exists, it leaves dest untouched.
+func (s *Store) Load(namespace, key string, dest interface{}) error {
+	metrics.StateLoadTotal.Inc()
+
+	const query = `SELECT data FROM state WHERE namespace = ? AND item_key = ?;`
+	row := s.db.QueryRow(query, namespace, key)
+
+	var jsonData string
+	if err := row.Scan(&jsonData); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return fmt.Errorf("failed to query state: %w", err)
+	}
+	if err := json.Unmarshal([]byte(jsonData), dest); err != nil {
+		return fmt.Errorf("failed to unmarshal state data: %w", err)
+	}
+	return nil
+}
+
+--- End File: ./pkg/storage/storage.go ---
+
+
+--- Processing Summary ---
+Total files found for content processing step: 62
+Content skipped due to size (> 10MB): 2
+Content skipped due to exclude pattern: 12
+Files whose content was processed: 48
+--- End of Summary ---

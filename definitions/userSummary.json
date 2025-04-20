@@ -1,0 +1,16 @@
+{
+  "userSummary": [
+    {
+      "id": "name",
+      "label": "Name",
+      "type": "text",
+      "validations": { "required": true }
+    },
+    {
+      "id": "age",
+      "label": "Age",
+      "type": "number",
+      "validations": { "min": 0 }
+    }
+  ]
+}

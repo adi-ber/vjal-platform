@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en" x-data="formApp()">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js" defer></script>
+  <title>Schema‑Driven Demo Form</title>
+</head>
+<body class="bg-gray-100 p-4 flex items-center justify-center min-h-screen">
+  <div class="bg-white w-full max-w-2xl p-8 rounded-lg shadow">
+    <h1 class="text-3xl font-semibold mb-6 text-center">Demo Form</h1>
+    <template x-if="error">
+      <div class="mb-4 p-3 bg-red-50 text-red-700 rounded" x-text="error"></div>
+    </template>
+    <form @submit.prevent="submit('pdf')" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <template x-for="field in schema.pages[0].fields" :key="field.id">
+        <div>
+          <label class="block text-sm font-medium mb-1" :for="field.id" x-text="field.label"></label>
+          <input
+            :type="field.type"
+            :id="field.id"
+            :name="field.id"
+            x-model="values[field.id]"
+            :placeholder="field.label"
+            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm
+                   focus:border-blue-500 focus:ring focus:ring-blue-200 focus:ring-opacity-50"
+          />
+        </div>
+      </template>
+      <div class="md:col-span-2 flex justify-end mt-4">
+        <button
+          type="submit"
+          :disabled="!isValid() || loading"
+          class="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+        >
+          <template x-if="loading">
+            <svg class="animate-spin h-5 w-5 mr-2 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+            </svg>
+          </template>
+          <span x-text="loading ? 'Processing…' : 'Download PDF'"></span>
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    function formApp() {
+      return {
+        schema: {{ .SchemaJSON }},
+        promptKey: "{{ index .PromptKeys 0 }}",
+        values: {},
+        loading: false,
+        error: '',
+        isValid() {
+          return this.schema.pages[0].fields.every(f => {
+            const v = this.values[f.id];
+            return v !== undefined && v !== null && v !== '';
+          });
+        },
+        submit(format) {
+          this.error = '';
+          if (!this.isValid()) return;
+          this.loading = true;
+          fetch('/process', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({promptKey: this.promptKey, data: this.values, format})
+          })
+          .then(async r => {
+            this.loading = false;
+            if (!r.ok) throw new Error(await r.text() || r.statusText);
+            return r.blob();
+          })
+          .then(blob => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'result.pdf';
+            document.body.appendChild(a); a.click();
+            URL.revokeObjectURL(url);
+          })
+          .catch(e => { this.loading = false; this.error = e.message; });
+        }
+      }
+    }
+  </script>
+</body>
+</html>

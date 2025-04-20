@@ -1,0 +1,4 @@
+{
+  "accountingClassifier": "You are a financial classifier.\nDescription: {{.description}}\nAmount: {{.amount}}\nAnswer:",
+  "userSummary":         "Form submission summary:\nName: {{.name}}\nAge: {{.age}}\nAnswer:"
+}

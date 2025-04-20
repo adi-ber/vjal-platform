@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <!-- Tailwind CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3/dist/tailwind.min.css" rel="stylesheet"/>
+  <!-- Alpine.js -->
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js" defer></script>
+  <title>Schema‑Driven Demo Form</title>
+</head>
+<body class="bg-gray-100 p-4">
+  <div x-data="formApp()" class="max-w-xl mx-auto bg-white p-6 rounded shadow">
+    <h1 class="text-2xl font-bold mb-4">Demo Form</h1>
+
+    <!-- Render each field from the first page -->
+    <template x-for="field in schema.pages[0].fields" :key="field.id">
+      <div class="mb-4">
+        <label class="block font-medium mb-1" x-text="field.label"></label>
+        <input
+          :type="field.type"
+          :name="field.id"
+          x-model="values[field.id]"
+          class="w-full border rounded px-3 py-2"
+        />
+      </div>
+    </template>
+
+    <button
+      @click="submit('pdf')"
+      class="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700"
+    >
+      Download PDF
+    </button>
+
+    <div id="out" class="mt-6 text-red-600"></div>
+  </div>
+
+  <script>
+    function formApp() {
+      return {
+        // These two will be injected by Go:
+        schema: {{ .SchemaJSON }},
+        promptKey: "{{ index .PromptKeys 0 }}",
+        values: {},
+        submit(format) {
+          fetch('/process', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+              promptKey: this.promptKey,
+              data: this.values,
+              format: format
+            })
+          })
+          .then(r => {
+            if (!r.ok) throw new Error(r.statusText);
+            return format==='pdf' ? r.blob() : r.text();
+          })
+          .then(resp => {
+            if (format==='pdf') {
+              const url = URL.createObjectURL(resp);
+              const a = document.createElement('a');
+              a.href = url; a.download = 'result.pdf';
+              document.body.appendChild(a);
+              a.click();
+              URL.revokeObjectURL(url);
+            } else {
+              document.getElementById('out').innerHTML = resp;
+            }
+          })
+          .catch(e => alert('Error: '+e));
+        }
+      }
+    }
+  </script>
+</body>
+</html>

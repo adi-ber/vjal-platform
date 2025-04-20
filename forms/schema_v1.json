@@ -1,1 +1,11 @@
-{"pages":[{"id":"start","fields":[]}]}
+{
+  "pages": [
+    {
+      "id": "start",
+      "fields": [
+        { "id": "name",  "label": "Your Name", "type": "text"   },
+        { "id": "age",   "label": "Your Age",  "type": "number" }
+      ]
+    }
+  ]
+}

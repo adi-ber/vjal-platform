@@ -2,158 +2,168 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 
 	"github.com/adi-ber/vjal-platform/pkg/config"
 	"github.com/adi-ber/vjal-platform/pkg/form"
 	"github.com/adi-ber/vjal-platform/pkg/license"
-	"github.com/adi-ber/vjal-platform/pkg/storage"
 	"github.com/adi-ber/vjal-platform/pkg/llm"
+	_ "github.com/adi-ber/vjal-platform/pkg/metrics"
 	"github.com/adi-ber/vjal-platform/pkg/output"
+	"github.com/adi-ber/vjal-platform/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/adi-ber/vjal-platform/pkg/metrics"
 )
 
+// processRequest is the JSON payload for our /process endpoint.
+type processRequest struct {
+	PromptKey string                 `json:"promptKey"`
+	Data      map[string]interface{} `json:"data"`
+	Format    string                 `json:"format"` // "html" or "pdf"
+}
+
 func main() {
-	// 1. Load config
+	// 1) Load configuration
 	cfg, err := config.Load("config.json")
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		log.Fatalf("config load error: %v", err)
 	}
 
-	// 2. Validate license
-	validator := license.NewValidator(*cfg)
+	// 1a) Ensure output directory exists
+	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
+		log.Fatalf("failed to create output dir %q: %v", cfg.OutputDir, err)
+	}
+
+	// 2) Load all form definitions from definitions/
+	formDefs, err := form.LoadDefinitionsDir("definitions")
+	if err != nil {
+		log.Fatalf("cannot load form definitions: %v", err)
+	}
+
+	// 3) Load LLM prompts
+	promptBytes, err := ioutil.ReadFile("llm_prompts.enc")
+	if err != nil {
+		log.Fatalf("failed to read llm_prompts.enc: %v", err)
+	}
+	var promptTemplates map[string]string
+	if err := json.Unmarshal(promptBytes, &promptTemplates); err != nil {
+		log.Fatalf("invalid JSON in llm_prompts.enc: %v", err)
+	}
+
+	// 4) Validate license
+	validator := license.NewValidator(cfg)
 	lic, err := validator.Validate(context.Background())
 	if err != nil {
 		log.Fatalf("license validation failed: %v", err)
 	}
 
-	// 3. Init storage for form state
-	stateDB := filepath.Join(cfg.OutputDir, "form_state.db")
-	store, err := storage.New(stateDB)
-	if err != nil {
-		log.Fatalf("failed to init storage: %v", err)
+	// 5) Initialize storage (for form state, unused here but required)
+	if _, err := storage.New(filepath.Join(cfg.OutputDir, "state.db")); err != nil {
+		log.Fatalf("storage init error: %v", err)
 	}
 
-	// 4. Load form schema & attach storage
-	frm, err := form.New(cfg.FormSchema, store, "default")
+	// 6) Initialize LLM client & renderer
+	ai, err := llm.New(cfg, lic)
 	if err != nil {
-		log.Fatalf("failed to load form schema: %v", err)
+		log.Fatalf("LLM init error: %v", err)
 	}
-
-	// 5. Init LLM
-	ai, err := llm.New(*cfg, lic)
-	if err != nil {
-		log.Fatalf("failed to init LLM: %v", err)
-	}
-
-	// 6. Init renderer
 	renderer := output.NewRenderer()
 
-	// 7. HTTP Handlers
+	// 7) Parse our prompt‑form template
+	promptFormTmpl := template.Must(template.ParseFiles(
+		"cmd/example/templates/prompt_form.html",
+	))
 
-	// GET /form?page=<pageID>
-	http.HandleFunc("/form", func(w http.ResponseWriter, r *http.Request) {
-		pageID := r.URL.Query().Get("page")
-		if pageID == "" {
-			pageID = "start"
-		}
-
-		// Load saved state
-		state, err := frm.LoadState(context.Background(), pageID)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("failed to load state: %v", err), 500)
+	// --- Serve the prompt‑driven form ---
+	http.HandleFunc("/prompt-form", func(w http.ResponseWriter, r *http.Request) {
+		key := r.URL.Query().Get("promptKey")
+		fields, ok := formDefs[key]
+		if !ok {
+			http.NotFound(w, r)
 			return
 		}
-
-		// Render page (stub)
-		html, err := frm.RenderPage(context.Background(), pageID)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("render error: %v", err), 500)
-			return
-		}
-
-		// Show saved values and HTML
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, "<h3>Saved Data: %v</h3>%s", state, html)
-	})
-
-	// POST /submit?page=<pageID>  body: JSON map[string]interface{}
-	http.HandleFunc("/submit", func(w http.ResponseWriter, r *http.Request) {
-		pageID := r.URL.Query().Get("page")
-		if pageID == "" {
-			pageID = "start"
-		}
-
-		var input map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			http.Error(w, "invalid JSON body", 400)
-			return
-		}
-
-		// Validate page input
-		warnings, err := frm.Validate(context.Background(), pageID, input)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("validation error: %v", err), 500)
-			return
-		}
-
-		// Persist page state
-		if err := frm.SaveState(context.Background(), pageID, input); err != nil {
-			http.Error(w, fmt.Sprintf("save state error: %v", err), 500)
-			return
-		}
-
-		// Compute next page
-		nextPage, err := frm.NextPage(pageID)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("next page error: %v", err), 500)
-			return
-		}
-
-		// Respond with warnings and next page
-		resp := map[string]interface{}{
-			"warnings": warnings,
-			"nextPage": nextPage,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	})
-
-	// GET /run?prompt=<text>
-	http.HandleFunc("/run", func(w http.ResponseWriter, r *http.Request) {
-		prompt := r.URL.Query().Get("prompt")
-		if prompt == "" {
-			prompt = "Hello, world!"
-		}
-		result, err := ai.Prompt(context.Background(), prompt)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("LLM error: %v", err), 500)
-			return
-		}
-		html, err := renderer.ToHTML(result)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("render error: %v", err), 500)
-			return
+		fieldsJSON, _ := json.Marshal(fields)
+		data := struct {
+			PromptFieldsJSON template.JS
+		}{
+			PromptFieldsJSON: template.JS(fieldsJSON),
 		}
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(html))
+		if err := promptFormTmpl.Execute(w, data); err != nil {
+			log.Printf("[prompt-form] template exec error: %v", err)
+		}
 	})
 
-	// Metrics & health
+	// --- Process form → prompt → LLM → HTML or PDF ---
+	http.HandleFunc("/process", func(w http.ResponseWriter, r *http.Request) {
+		var req processRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		// 1) Lookup prompt template
+		tpl, ok := promptTemplates[req.PromptKey]
+		if !ok {
+			http.Error(w, "unknown promptKey", http.StatusBadRequest)
+			return
+		}
+
+		// 2) Render the prompt by merging in user data
+		var buf bytes.Buffer
+		t := template.Must(template.New("p").Parse(tpl))
+		if err := t.Execute(&buf, req.Data); err != nil {
+			http.Error(w, fmt.Sprintf("prompt render error: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// 3) Call the LLM
+		aiResp, err := ai.Prompt(context.Background(), buf.String())
+		if err != nil {
+			http.Error(w, fmt.Sprintf("LLM error: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// 4) Return in requested format
+		switch req.Format {
+		case "html":
+			out, err := renderer.ToHTML(aiResp)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("HTML render error: %v", err), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte(out))
+
+		default: // pdf
+			pdf, err := renderer.ToPDF(aiResp)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("PDF error: %v", err), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/pdf")
+			w.Header().Set("Content-Disposition", "attachment; filename=\"result.pdf\"")
+			w.Write(pdf)
+		}
+	})
+
+	// --- Metrics & health ---
 	http.Handle("/metrics", promhttp.Handler())
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "OK")
 	})
 
-	// Start server
+	// --- Start server ---
 	addr := fmt.Sprintf(":%d", cfg.HTTPPort)
-	log.Printf("starting server on %s", addr)
+	log.Printf("starting example server on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }

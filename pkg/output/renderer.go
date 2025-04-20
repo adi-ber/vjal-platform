@@ -3,13 +3,18 @@ package output
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 
 	"github.com/adi-ber/vjal-platform/pkg/metrics"
-	"github.com/prometheus/client_golang/prometheus"
+	"github.com/jung-kurt/gofpdf"
 	"github.com/yuin/goldmark"
+
+	// DejaVu Sans TTF data
+	dejavusans "github.com/go-fonts/dejavu/dejavusans"
 )
+
+// dejavuTTF is the raw TTF bytes for DejaVu Sans, imported from the go-fonts package.
+var dejavuTTF = dejavusans.TTF
 
 // Renderer handles converting Markdown to various formats.
 type Renderer struct {
@@ -23,11 +28,8 @@ func NewRenderer() *Renderer {
 	}
 }
 
-// ToHTML converts Markdown to HTML, recording duration.
+// ToHTML converts Markdown to HTML.
 func (r *Renderer) ToHTML(input string) (string, error) {
-	timer := prometheus.NewTimer(metrics.OutputHTMLDuration)
-	defer timer.ObserveDuration()
-
 	var buf bytes.Buffer
 	if err := r.md.Convert([]byte(input), &buf); err != nil {
 		return "", fmt.Errorf("HTML conversion failed: %w", err)
@@ -35,10 +37,23 @@ func (r *Renderer) ToHTML(input string) (string, error) {
 	return buf.String(), nil
 }
 
-// ToPDF attempts to convert Markdown to PDF.
-// Currently a stub that records an error.
+// ToPDF converts a Markdown string into a simple PDF with full UTF-8 support.
 func (r *Renderer) ToPDF(input string) ([]byte, error) {
 	metrics.OutputPDFTotal.Inc()
-	metrics.OutputPDFErrors.Inc()
-	return nil, errors.New("PDF generation not implemented")
+
+	// Create a new PDF, register our DejaVu Sans TrueType font, then use it.
+	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf.AddUTF8FontFromBytes("dejavu", "", dejavuTTF)
+	pdf.SetFont("dejavu", "", 12)
+	pdf.AddPage()
+
+	// Write the markdown text into the PDF
+	pdf.MultiCell(0, 6, input, "", "", false)
+
+	var buf bytes.Buffer
+	if err := pdf.Output(&buf); err != nil {
+		metrics.OutputPDFErrors.Inc()
+		return nil, fmt.Errorf("PDF generation failed: %w", err)
+	}
+	return buf.Bytes(), nil
 }

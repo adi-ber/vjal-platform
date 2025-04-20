@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en" x-data="formPromptApp()" x-init="init()">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js" defer></script>
+  <title>Dynamic Multi‑Step Form</title>
+</head>
+<body class="bg-gray-100 p-4 flex items-center justify-center min-h-screen">
+  <div class="bg-white w-full max-w-xl p-8 rounded-lg shadow">
+    <h1 class="text-2xl font-bold mb-4 capitalize" x-text="promptKey"></h1>
+    <template x-if="error">
+      <div class="mb-4 p-3 bg-red-50 text-red-700 rounded" x-text="error"></div>
+    </template>
+    <form @submit.prevent="submit" class="space-y-4">
+      <template x-for="(f,i) in fields" :key="i">
+        <div>
+          <label class="block font-medium text-gray-700" :for="f.id" x-text="f.label"></label>
+          <input type="text"
+                 :id="f.id"
+                 x-model="values[f.id]"
+                 class="mt-1 block w-full rounded border-gray-300 shadow-sm"/>
+        </div>
+      </template>
+      <button type="submit"
+              :disabled="loading || !allAnswered()"
+              class="w-full py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+        <span x-show="!loading">Next</span>
+        <span x-show="loading">…</span>
+      </button>
+    </form>
+  </div>
+
+  <script>
+    function formPromptApp() {
+      return {
+        promptKey: new URLSearchParams(location.search).get('promptKey'),
+        fields: [], values: {}, round: 0, maxRounds: 3, loading: false, error: '',
+        init() {
+          this.fields = PROMPT_FIELDS[this.promptKey] || []
+          this.maxRounds = this.fields[0]?.maxRounds || 3
+          this.fields.forEach(f => this.values[f.id] = '')
+        },
+        allAnswered() {
+          return this.fields.every(f => this.values[f.id]?.trim())
+        },
+        async submit() {
+          this.error = ''; this.loading = true
+          try {
+            const res = await fetch('/process',{method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({
+                promptKey:this.promptKey,
+                data:this.values,
+                round:this.round,
+                maxRounds:this.maxRounds
+              })
+            })
+            if(!res.ok) throw await res.text()
+            const p = await res.json()
+            if(p.nextQuestions?.length){
+              p.nextQuestions.forEach((q,i)=>{
+                const id = this.round + '-' + i
+                this.fields.push({id,label:q})
+                this.values[id] = ''
+              })
+              this.round = p.round
+            } else {
+              // final HTML
+              const html = await res.text()
+              document.write(html)
+            }
+          } catch(e){
+            this.error = e.toString()
+          } finally { this.loading=false }
+        }
+      }
+    }
+    const PROMPT_FIELDS = {{ .PromptFieldsJSON }}
+  </script>
+</body>
+</html>

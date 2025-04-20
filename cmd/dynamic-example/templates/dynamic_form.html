@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <title>Dynamic, Multi‑Step Form</title>
+</head>
+<body class="bg-gray-100 p-6">
+  <div id="container" class="max-w-2xl mx-auto bg-white p-8 rounded shadow">
+    <h1 class="text-3xl font-bold mb-4">Dynamic, Multi‑Step Form</h1>
+  </div>
+
+  <script>
+    let currentRound = {{.Round}};
+    const maxRounds = {{.MaxRounds}};
+    let allAnswers = {};
+
+    const initialQuestions = {{.QuestionsJSON}};
+    const container = document.getElementById('container');
+
+    function render(questions) {
+      container.innerHTML = `
+        <h1 class="text-3xl font-bold mb-2">Round ${currentRound} of ${maxRounds}</h1>
+        <form id="qform" class="space-y-6">
+          ${questions.map(q => `
+            <div>
+              <label for="${q.id}" class="block font-medium mb-1">${q.label}</label>
+              <textarea id="${q.id}" name="${q.id}" rows="4"
+                class="w-full rounded border-gray-300 p-3 focus:ring focus:ring-blue-200"></textarea>
+            </div>
+          `).join('')}
+          <button id="nextBtn" type="button"
+            class="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+            ${currentRound < maxRounds ? 'Next' : 'Finish'}
+          </button>
+        </form>
+      `;
+      document.getElementById('nextBtn').onclick = nextStep;
+    }
+
+    async function nextStep() {
+      const form = document.getElementById('qform');
+      const formData = new FormData(form);
+      for (let [k,v] of formData.entries()) {
+        allAnswers[k] = v;
+      }
+      const btn = document.getElementById('nextBtn');
+      btn.disabled = true;
+      btn.textContent = 'Loading…';
+
+      const resp = await fetch('/dynamic-submit', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({round: currentRound, answers: allAnswers})
+      });
+      const data = await resp.json();
+
+      if (data.done) {
+        alert('✅ Completed all ' + currentRound + ' rounds.\n\nReport:\n' + data.report);
+        return;
+      }
+
+      currentRound = data.nextRound;
+      render(data.questions);
+    }
+
+    render(initialQuestions);
+  </script>
+</body>
+</html>
