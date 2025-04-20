@@ -10,7 +10,7 @@ RUN go mod download
 FROM modcache AS builder
 WORKDIR /app
 COPY . .
-# Build statically with symbol-stripping (-s -w)
+# Build static, strip symbols
 RUN CGO_ENABLED=0 go build \
     -trimpath \
     -ldflags="-s -w" \
@@ -32,5 +32,6 @@ COPY --from=compressor /app/vjal-app /vjal-app
 COPY --from=builder /app/config.json  /config.json
 COPY --from=builder /app/license.json /license.json
 COPY --from=builder /app/forms        /forms
+COPY --from=builder /app/output       /output
 
 ENTRYPOINT ["/vjal-app"]
